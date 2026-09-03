@@ -9,11 +9,13 @@ INCLUDEPATH += $$PWD/src $$PWD/../common
 SOURCES += \
     src/main.cpp \
     src/client.cpp \
+    src/walletcontroller.cpp \
     src/userwindow.cpp \
     ../common/protocol.cpp
 
 HEADERS += \
     src/client.h \
+    src/walletcontroller.h \
     src/userwindow.h \
     ../common/protocol.h \
     ../common/appstyle.h

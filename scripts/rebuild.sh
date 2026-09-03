@@ -53,6 +53,7 @@ fi
     cp -a "$SRC/common" "$DST/"
     cp -a "$SRC/database" "$DST/"
     cp -a "$SRC/dashboard" "$DST/"
+    cp -a "$SRC/tests" "$DST/"
   fi
   python3 - <<PY
 from pathlib import Path

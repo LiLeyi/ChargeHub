@@ -1,0 +1,124 @@
+{
+  "schemaVersion": "1.0",
+  "generatedAt": "2026-09-02T20:00:00+08:00",
+  "timeZone": "Asia/Shanghai",
+  "source": "mock",
+  "metrics": {
+    "totalChargeKwh": 87342.0,
+    "totalRevenueCents": 877300,
+    "activePileCount": 11
+  },
+  "revenueTrend": {
+    "rangeDays": 30,
+    "points": [
+      {"date": "2026-08-04", "revenueCents": 23800},
+      {"date": "2026-08-05", "revenueCents": 26500},
+      {"date": "2026-08-06", "revenueCents": 25100},
+      {"date": "2026-08-07", "revenueCents": 29400},
+      {"date": "2026-08-08", "revenueCents": 32100},
+      {"date": "2026-08-09", "revenueCents": 34800},
+      {"date": "2026-08-10", "revenueCents": 31200},
+      {"date": "2026-08-11", "revenueCents": 28600},
+      {"date": "2026-08-12", "revenueCents": 30500},
+      {"date": "2026-08-13", "revenueCents": 33700},
+      {"date": "2026-08-14", "revenueCents": 35900},
+      {"date": "2026-08-15", "revenueCents": 38200},
+      {"date": "2026-08-16", "revenueCents": 37100},
+      {"date": "2026-08-17", "revenueCents": 34600},
+      {"date": "2026-08-18", "revenueCents": 32800},
+      {"date": "2026-08-19", "revenueCents": 35400},
+      {"date": "2026-08-20", "revenueCents": 37600},
+      {"date": "2026-08-21", "revenueCents": 40100},
+      {"date": "2026-08-22", "revenueCents": 43800},
+      {"date": "2026-08-23", "revenueCents": 42200},
+      {"date": "2026-08-24", "revenueCents": 39600},
+      {"date": "2026-08-25", "revenueCents": 41400},
+      {"date": "2026-08-26", "revenueCents": 44700},
+      {"date": "2026-08-27", "revenueCents": 46300},
+      {"date": "2026-08-28", "revenueCents": 48900},
+      {"date": "2026-08-29", "revenueCents": 51200},
+      {"date": "2026-08-30", "revenueCents": 49800},
+      {"date": "2026-08-31", "revenueCents": 52600},
+      {"date": "2026-09-01", "revenueCents": 54800},
+      {"date": "2026-09-02", "revenueCents": 57100}
+    ]
+  },
+  "pileStatus": {
+    "idle": 8,
+    "inUse": 3,
+    "fault": 1
+  },
+  "hourlyCharge": [
+    {"hour": 0, "chargeKwh": 18.0},
+    {"hour": 1, "chargeKwh": 12.0},
+    {"hour": 2, "chargeKwh": 8.0},
+    {"hour": 3, "chargeKwh": 5.0},
+    {"hour": 4, "chargeKwh": 6.0},
+    {"hour": 5, "chargeKwh": 10.0},
+    {"hour": 6, "chargeKwh": 22.0},
+    {"hour": 7, "chargeKwh": 48.0},
+    {"hour": 8, "chargeKwh": 72.0},
+    {"hour": 9, "chargeKwh": 65.0},
+    {"hour": 10, "chargeKwh": 58.0},
+    {"hour": 11, "chargeKwh": 61.0},
+    {"hour": 12, "chargeKwh": 70.0},
+    {"hour": 13, "chargeKwh": 68.0},
+    {"hour": 14, "chargeKwh": 63.0},
+    {"hour": 15, "chargeKwh": 66.0},
+    {"hour": 16, "chargeKwh": 74.0},
+    {"hour": 17, "chargeKwh": 88.0},
+    {"hour": 18, "chargeKwh": 96.0},
+    {"hour": 19, "chargeKwh": 104.0},
+    {"hour": 20, "chargeKwh": 91.0},
+    {"hour": 21, "chargeKwh": 76.0},
+    {"hour": 22, "chargeKwh": 55.0},
+    {"hour": 23, "chargeKwh": 32.0}
+  ],
+  "stationRanking": [
+    {
+      "stationId": 1,
+      "stationName": "北京理工大学充电站",
+      "revenueCents": 356800,
+      "orderCount": 128,
+      "utilizationPercent": 78.6
+    },
+    {
+      "stationId": 2,
+      "stationName": "中关村软件园充电站",
+      "revenueCents": 298600,
+      "orderCount": 104,
+      "utilizationPercent": 69.4
+    },
+    {
+      "stationId": 3,
+      "stationName": "五道口地铁充电站",
+      "revenueCents": 221900,
+      "orderCount": 86,
+      "utilizationPercent": 61.2
+    }
+  ],
+  "loadForecast": {
+    "status": "available",
+    "modelVersion": "baseline-1",
+    "series": [
+      {
+        "horizonHours": 1,
+        "points": [
+          {"time": "2026-09-02T21:00:00+08:00", "loadKw": 126.0, "availablePileCount": 5, "isPeak": false}
+        ]
+      },
+      {
+        "horizonHours": 6,
+        "points": [
+          {"time": "2026-09-03T02:00:00+08:00", "loadKw": 98.0, "availablePileCount": 7, "isPeak": false}
+        ]
+      },
+      {
+        "horizonHours": 24,
+        "points": [
+          {"time": "2026-09-03T20:00:00+08:00", "loadKw": 142.0, "availablePileCount": 3, "isPeak": true}
+        ]
+      }
+    ]
+  }
+}

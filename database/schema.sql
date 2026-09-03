@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS user (
     avatar_path   TEXT    NOT NULL DEFAULT '',
     password_hash TEXT    NOT NULL DEFAULT '',
     balance       REAL    NOT NULL DEFAULT 0.00,
+    balance_cents INTEGER NOT NULL DEFAULT 0,
     status        TEXT    NOT NULL DEFAULT '正常' CHECK (status IN ('正常', '冻结', '注销')),
     created_at    TEXT    NOT NULL,
     address       TEXT    NOT NULL DEFAULT '',
@@ -73,12 +74,19 @@ CREATE TABLE IF NOT EXISTS charge_order (
 );
 
 CREATE TABLE IF NOT EXISTS recharge_log (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id    INTEGER NOT NULL REFERENCES user(id),
-    amount     REAL    NOT NULL,
-    result     TEXT    NOT NULL,
-    created_at TEXT    NOT NULL
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id             INTEGER NOT NULL REFERENCES user(id),
+    amount              REAL    NOT NULL,
+    result              TEXT    NOT NULL,
+    created_at          TEXT    NOT NULL,
+    amount_cents        INTEGER NOT NULL DEFAULT 0,
+    balance_after_cents INTEGER NOT NULL DEFAULT 0,
+    request_id          TEXT,
+    trade_no            TEXT,
+    status              TEXT    NOT NULL DEFAULT 'succeeded'
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_recharge_request_id ON recharge_log(request_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_recharge_trade_no ON recharge_log(trade_no);
 
 CREATE TABLE IF NOT EXISTS audit_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,

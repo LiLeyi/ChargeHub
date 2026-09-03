@@ -3,8 +3,9 @@
 
 HTTP（默认 0.0.0.0:5000，组员浏览器可填服务器 IP）：
   GET /              index.html
-  GET /api/overview  今日/本月营收、桩状态、地图点
-  GET /api/analysis  负荷预测与告警（读分析表）
+  GET /api/dashboard  版本化运营快照（新页面唯一数据源）
+  GET /api/overview   旧页面过渡接口
+  GET /api/analysis   旧页面预测与告警接口
 
 库路径优先环境变量 CHARGEHUB_DB，否则找管理端 data/chargehub.db。
 """
@@ -12,16 +13,22 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import quote
 
 from flask import Flask, jsonify, send_from_directory
+
+if __package__:
+    from .dashboardrepository import DashboardDataError, DashboardRepository
+else:
+    from dashboardrepository import DashboardDataError, DashboardRepository
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = Path(__file__).resolve().parent
 
 app = Flask(__name__, static_folder=str(STATIC), static_url_path="")
+dashboardRepositoryFactory = DashboardRepository
 
 
 def findDb() -> Path:
@@ -46,13 +53,21 @@ DB = findDb()
 
 
 def q(sql: str, args=()):
-    conn = sqlite3.connect(str(DB))
-    conn.row_factory = sqlite3.Row
+    conn = None
     try:
+        path = DB.resolve()
+        conn = sqlite3.connect(
+            f"file:{quote(str(path))}?mode=ro", uri=True, timeout=5
+        )
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA query_only = ON")
+        conn.execute("PRAGMA busy_timeout = 5000")
         rows = [dict(r) for r in conn.execute(sql, args).fetchall()]
     except sqlite3.OperationalError:
         rows = []
-    conn.close()
+    finally:
+        if conn is not None:
+            conn.close()
     return rows
 
 
@@ -64,6 +79,27 @@ def one(sql: str, args=()):
 @app.get("/")
 def index():
     return send_from_directory(STATIC, "index.html")
+
+
+@app.get("/api/dashboard")
+def dashboard():
+    try:
+        snapshot = dashboardRepositoryFactory(DB).loadSnapshot()
+        response = jsonify(snapshot)
+        response.status_code = 200
+    except DashboardDataError as error:
+        app.logger.error("dashboard snapshot unavailable: %s", error.category)
+        response = jsonify(
+            {
+                "error": {
+                    "code": "DASHBOARD_UNAVAILABLE",
+                    "message": "运营数据暂不可用",
+                }
+            }
+        )
+        response.status_code = 503
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def summed(where, args=()):
@@ -147,7 +183,6 @@ def overview():
             "mix": [{"name": r["name"], "value": round(r["amount"] or 0, 2)} for r in mix],
             "hours": hours,
             "updated": datetime.now().strftime("%H:%M:%S"),
-            "db": str(DB),
         }
     )
 
@@ -183,12 +218,9 @@ def main() -> None:
     global DB
     DB = findDb()
     if not DB.exists():
-        sys.path.insert(0, str(ROOT))
-        from database.initdb import initDb
-
-        DB = ROOT / "database" / "chargehub.db"
-        initDb(DB)
-    print("database:", DB)
+        print("warning: dashboard database is unavailable; API will return 503")
+    else:
+        print("database:", DB)
     print("dashboard http://127.0.0.1:5000")
     print("dashboard http://0.0.0.0:5000  (局域网可用虚拟机 IP 访问)")
     app.run(host="0.0.0.0", port=5000, debug=False)

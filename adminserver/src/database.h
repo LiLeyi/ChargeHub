@@ -34,7 +34,7 @@ public:
 private:
     QSqlDatabase conn();
     QString path_;
-    QRecursiveMutex mutex_;
+    QMutex mutex_{QMutex::Recursive};
 };
 
 #endif

@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS user (
     avatar_path TEXT NOT NULL DEFAULT '',
     password_hash TEXT NOT NULL DEFAULT '',
     balance REAL NOT NULL DEFAULT 0.00,
+    balance_cents INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT '正常',
     created_at TEXT NOT NULL,
     address TEXT NOT NULL DEFAULT '',
@@ -81,8 +82,15 @@ CREATE TABLE IF NOT EXISTS recharge_log (
     user_id INTEGER NOT NULL,
     amount REAL NOT NULL,
     result TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL DEFAULT 0,
+    balance_after_cents INTEGER NOT NULL DEFAULT 0,
+    request_id TEXT,
+    trade_no TEXT,
+    status TEXT NOT NULL DEFAULT 'succeeded'
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_recharge_request_id ON recharge_log(request_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_recharge_trade_no ON recharge_log(trade_no);
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     actor TEXT NOT NULL,
@@ -229,6 +237,42 @@ bool Database::open()
     addUserCol("loc_lng", "REAL NOT NULL DEFAULT 116.3473");
     addUserCol("close_reason", "TEXT NOT NULL DEFAULT ''");
     addUserCol("closed_at", "TEXT NOT NULL DEFAULT ''");
+    addUserCol("balance_cents", "INTEGER NOT NULL DEFAULT 0");
+    auto addRechargeCol = [&](const char *name, const char *def) {
+        q.exec("PRAGMA table_info(recharge_log)");
+        bool has = false;
+        while (q.next()) {
+            if (q.value(1).toString() == QLatin1String(name))
+                has = true;
+        }
+        if (has)
+            return true;
+        return db.exec(QString("ALTER TABLE recharge_log ADD COLUMN %1 %2")
+                           .arg(QLatin1String(name), QLatin1String(def))).isActive();
+    };
+    if (!addRechargeCol("amount_cents", "INTEGER NOT NULL DEFAULT 0")
+        || !addRechargeCol("balance_after_cents", "INTEGER NOT NULL DEFAULT 0")
+        || !addRechargeCol("request_id", "TEXT")
+        || !addRechargeCol("trade_no", "TEXT")
+        || !addRechargeCol("status", "TEXT NOT NULL DEFAULT 'succeeded'")) {
+        return false;
+    }
+    if (!db.exec("UPDATE user SET balance_cents=CAST(ROUND(balance*100) AS INTEGER) "
+                 "WHERE balance_cents=0 AND ABS(balance)>0.000001").isActive()
+        || !db.exec("UPDATE recharge_log SET amount_cents=CAST(ROUND(amount*100) AS INTEGER) "
+                    "WHERE amount_cents=0 AND ABS(amount)>0.000001").isActive()
+        || !db.exec("UPDATE recharge_log SET request_id='legacy-' || id "
+                    "WHERE request_id IS NULL OR request_id='' ").isActive()
+        || !db.exec("UPDATE recharge_log SET trade_no=printf('RC%08d',id) "
+                    "WHERE trade_no IS NULL OR trade_no='' ").isActive()
+        || !db.exec("UPDATE recharge_log SET status='succeeded' "
+                    "WHERE status IS NULL OR status='' ").isActive()
+        || !db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_recharge_request_id "
+                    "ON recharge_log(request_id)").isActive()
+        || !db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_recharge_trade_no "
+                    "ON recharge_log(trade_no)").isActive()) {
+        return false;
+    }
     q.exec("PRAGMA table_info(station_review)");
     bool hasPile = false;
     while (q.next()) {
@@ -255,12 +299,13 @@ bool Database::open()
         q.addBindValue(QString::fromLatin1(hash));
         q.addBindValue(now);
         q.exec();
-        q.prepare("INSERT INTO user(phone,nickname,avatar_path,password_hash,balance,status,created_at) VALUES(?,?,?,?,?,?,?)");
+        q.prepare("INSERT INTO user(phone,nickname,avatar_path,password_hash,balance,balance_cents,status,created_at) VALUES(?,?,?,?,?,?,?,?)");
         q.addBindValue("13800138000");
         q.addBindValue(QString::fromUtf8("用户8000"));
         q.addBindValue("");
         q.addBindValue(QString::fromLatin1(hash));
         q.addBindValue(80.0);
+        q.addBindValue(8000);
         q.addBindValue(QString::fromUtf8("正常"));
         q.addBindValue(now);
         q.exec();
@@ -270,12 +315,13 @@ bool Database::open()
             {"17700009999", "用户9999", 5.0, "冻结"},
         };
         for (const auto &eu : extras) {
-            q.prepare("INSERT INTO user(phone,nickname,avatar_path,password_hash,balance,status,created_at) VALUES(?,?,?,?,?,?,?)");
+            q.prepare("INSERT INTO user(phone,nickname,avatar_path,password_hash,balance,balance_cents,status,created_at) VALUES(?,?,?,?,?,?,?,?)");
             q.addBindValue(QString::fromLatin1(eu.p));
             q.addBindValue(QString::fromUtf8(eu.n));
             q.addBindValue("");
             q.addBindValue(QString::fromLatin1(hash));
             q.addBindValue(eu.b);
+            q.addBindValue(qRound64(eu.b * 100.0));
             q.addBindValue(QString::fromUtf8(eu.st));
             q.addBindValue(now);
             q.exec();

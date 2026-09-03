@@ -40,6 +40,10 @@ int Client::request(const QString &type, const QJsonObject &data, const QString 
 {
     ++seq_;
     QJsonObject payload{{"type", type}, {"seq", seq_}, {"role", "user"}, {"token", token}, {"data", data}};
+    if (type == QStringLiteral("RECHARGE") || type == QStringLiteral("QUERY_RECHARGE")
+        || type == QStringLiteral("QUERY_WALLET") || type == QStringLiteral("LIST_RECHARGE")) {
+        payload.insert(QStringLiteral("protocolVersion"), 2);
+    }
     if (sock_.state() != QAbstractSocket::ConnectedState) {
         emit failed(QString::fromUtf8("未连接到服务器"));
         return seq_;

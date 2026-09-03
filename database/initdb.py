@@ -59,9 +59,9 @@ def initDb(path: Path = DB_PATH, *, withHistory: bool = True) -> Path:
     ]
     for phone, nick, bal, status in users:
         conn.execute(
-            "INSERT INTO user(phone, nickname, avatar_path, password_hash, balance, status, created_at) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (phone, nick, "", ADMIN_HASH, bal, status, now),
+            "INSERT INTO user(phone, nickname, avatar_path, password_hash, balance, balance_cents, status, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (phone, nick, "", ADMIN_HASH, bal, round(bal * 100), status, now),
         )
 
     for s in STATIONS:
@@ -129,8 +129,9 @@ def initDb(path: Path = DB_PATH, *, withHistory: bool = True) -> Path:
                 order_id += 1
 
         conn.execute(
-            "INSERT INTO recharge_log(user_id, amount, result, created_at) VALUES (?,?,?,?)",
-            (1, 80.00, "成功", now),
+            "INSERT INTO recharge_log(user_id, amount, result, created_at, amount_cents, "
+            "balance_after_cents, request_id, trade_no, status) VALUES (?,?,?,?,?,?,?,?,?)",
+            (1, 80.00, "成功", now, 8000, 8000, "legacy-seed-1", "RCSEED00000001", "succeeded"),
         )
         conn.execute(
             "INSERT INTO audit_log(actor, action, target, result, created_at) VALUES (?,?,?,?,?)",

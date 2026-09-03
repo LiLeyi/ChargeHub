@@ -56,10 +56,12 @@ private:
     int userIdByToken(const QString &token) const;
     void dropUser(int userId);
     QJsonObject ok(const QString &type, int seq, const QString &msg, const QJsonObject &data) const;
-    QJsonObject fail(const QString &type, int seq, int code, const QString &msg) const;
+    QJsonObject fail(const QString &type, int seq, int code, const QString &msg,
+                     const QString &errorCode = QString()) const;
     QVariantMap requireUser(const QString &token, QString *err) const;
     QJsonObject publicUser(const QVariantMap &u) const;
     QJsonObject recharge(const QVariantMap &user, const QJsonObject &data);
+    QJsonObject queryRecharge(const QVariantMap &user, const QJsonObject &data);
     QJsonObject updateProfile(const QVariantMap &user, const QJsonObject &data);
     QJsonObject queryStations(const QVariantMap &user, const QJsonObject &data);
     QJsonObject closeAccount(const QVariantMap &user);

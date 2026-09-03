@@ -10,6 +10,7 @@
 #include <QVector>
 #include <QBuffer>
 #include <QDesktopServices>
+#include <QDebug>
 #include <QFileDialog>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -33,6 +34,14 @@
 #include <QSettings>
 
 static QString u8(const char *s) { return QString::fromUtf8(s); }
+
+static bool isWalletMessage(const QString &type)
+{
+    return type == QStringLiteral("RECHARGE")
+        || type == QStringLiteral("QUERY_RECHARGE")
+        || type == QStringLiteral("QUERY_WALLET")
+        || type == QStringLiteral("LIST_RECHARGE");
+}
 
 static QString goldStars(int n)
 {
@@ -99,9 +108,35 @@ UserWindow::UserWindow(QWidget *parent) : QMainWindow(parent)
     connect(&client_, &Client::failed, this, [this](const QString &m) {
         loginHint_->setText(m);
         statusBar()->showMessage(m);
+        if (walletController.isBusy()) {
+            walletTimeout.stop();
+            walletController.markFailure(QStringLiteral("NETWORK_ERROR"));
+            qWarning().noquote()
+                << QStringLiteral("wallet errorCode=NETWORK_ERROR requestId=%1")
+                       .arg(walletController.pendingRequestId().isEmpty()
+                                ? QStringLiteral("<none>")
+                                : walletController.pendingRequestId());
+            updateWalletUi();
+        }
     });
     connect(&client_, &Client::responded, this, &UserWindow::onResp);
     connect(&poll_, &QTimer::timeout, this, &UserWindow::pollCharge);
+    walletTimeout.setSingleShot(true);
+    walletTimeout.setInterval(6000);
+    connect(&walletTimeout, &QTimer::timeout, this, [this] {
+        const WalletState previousState = walletController.state();
+        walletController.markTimeout();
+        qWarning().noquote()
+            << QStringLiteral("wallet errorCode=TIMEOUT requestId=%1")
+                   .arg(walletController.pendingRequestId().isEmpty()
+                            ? QStringLiteral("<none>")
+                            : walletController.pendingRequestId());
+        updateWalletUi();
+        if (previousState == WalletState::Submitting || previousState == WalletState::Querying)
+            statusBar()->showMessage(u8("充值结果暂不确定，请查询原请求"));
+        else
+            statusBar()->showMessage(u8("余额暂不可用"));
+    });
     statusBar()->showMessage(u8("未连接服务器"));
     reconnect();
 }
@@ -344,6 +379,7 @@ void UserWindow::switchTab(int i)
             client_.request("LIST_ORDERS", {}, token_);
     } else if (i == 4) {
         refreshMe();
+        loadWallet();
     }
 }
 
@@ -703,30 +739,44 @@ QWidget *UserWindow::buildMe()
 
     auto *payLab = new QLabel(u8("钱包充值（模拟支付，单笔 ≤ 10000 元）"));
     payEdit_ = new QLineEdit("20");
+    payEdit_->setPlaceholderText(u8("输入0.01至10000.00，最多两位小数"));
+    connect(payEdit_, &QLineEdit::textEdited, this, [this] {
+        walletController.beginEditing();
+        updateWalletUi();
+    });
     auto *row = new QHBoxLayout;
     row->setSpacing(8);
     for (int a : {20, 50, 100, 200}) {
         auto *b = new QPushButton(QString("¥%1").arg(a));
         b->setObjectName("ghost");
         b->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-        connect(b, &QPushButton::clicked, this, [this, a] { payEdit_->setText(QString::number(a)); });
+        connect(b, &QPushButton::clicked, this, [this, a] {
+            payEdit_->setText(QString::number(a));
+            walletController.beginEditing();
+            updateWalletUi();
+        });
+        rechargeQuickButtons.append(b);
         row->addWidget(b);
     }
-    auto *pay = new QPushButton(u8("确认充值"));
-    pay->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    connect(pay, &QPushButton::clicked, this, [this] {
-        const double a = payEdit_->text().toDouble();
-        if (a <= 0 || a > 10000) {
-            QMessageBox::warning(this, u8("金额错误"), u8("单笔充值须大于 0 且不超过 10000 元"));
-            return;
-        }
-        client_.request("RECHARGE", QJsonObject{{"amount", a}}, token_);
-    });
+    rechargeButton = new QPushButton(u8("确认充值"));
+    rechargeButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    connect(rechargeButton, &QPushButton::clicked, this, &UserWindow::submitRecharge);
+    connect(payEdit_, &QLineEdit::returnPressed, this, &UserWindow::submitRecharge);
+    newRechargeButton = new QPushButton(u8("新建一笔充值"));
+    newRechargeButton->setObjectName("ghost");
+    newRechargeButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    newRechargeButton->hide();
+    connect(newRechargeButton, &QPushButton::clicked, this, &UserWindow::startNewRecharge);
+    walletHint = new QLabel(u8("余额尚未加载"));
+    walletHint->setObjectName("muted");
+    walletHint->setWordWrap(true);
     lay->addSpacing(6);
     lay->addWidget(payLab);
+    lay->addWidget(walletHint);
     lay->addLayout(row);
     lay->addWidget(payEdit_);
-    lay->addWidget(pay);
+    lay->addWidget(rechargeButton);
+    lay->addWidget(newRechargeButton);
 
     auto *logout = new QPushButton(u8("退出登录"));
     logout->setObjectName("ghost");
@@ -734,6 +784,9 @@ QWidget *UserWindow::buildMe()
     connect(logout, &QPushButton::clicked, this, [this] {
         token_.clear();
         poll_.stop();
+        walletTimeout.stop();
+        walletController = WalletController();
+        walletBlocked = false;
         root_->setCurrentIndex(0);
         loginHint_->setText(u8("已安全退出，请重新登录"));
         statusBar()->showMessage(u8("已退出登录"));
@@ -896,8 +949,8 @@ void UserWindow::queryStations()
 void UserWindow::applyUser(const QJsonObject &u)
 {
     user_ = u;
-    const double bal = u.value("balance").toDouble();
-    headBal_->setText(u8("余额 ¥") + QString::number(bal, 'f', 2));
+    if (u.value("balanceCents").isDouble())
+        walletController.acceptWallet(QJsonObject{{"balanceCents", u.value("balanceCents")}});
     if (u.contains("lat"))
         locLat_ = u.value("lat").toDouble(locLat_);
     if (u.contains("lng"))
@@ -972,12 +1025,170 @@ void UserWindow::refreshMe()
         return;
     const QString nick = user_.value("nickname").toString();
     meName_->setText(nick);
-    meBal_->setText(user_.value("phone").toString() + u8("  ·  钱包 ¥")
-                    + QString::number(user_.value("balance").toDouble(), 'f', 2));
     nickEdit_->setText(nick);
     showAvatar(user_);
-    if (!token_.isEmpty())
-        client_.request("LIST_RECHARGE", {}, token_);
+    updateWalletUi();
+}
+
+void UserWindow::loadWallet()
+{
+    if (token_.isEmpty() || walletController.isBusy()
+        || walletController.state() == WalletState::Uncertain) {
+        return;
+    }
+    walletController.beginLoading();
+    updateWalletUi();
+    walletTimeout.start();
+    client_.request("QUERY_WALLET", {}, token_);
+}
+
+void UserWindow::submitRecharge()
+{
+    if (walletController.canQuery()) {
+        queryPendingRecharge();
+        return;
+    }
+    if (!walletController.canSubmit() || walletBlocked)
+        return;
+    const AmountParseResult amount = WalletController::parseAmountCents(payEdit_->text());
+    if (!amount.valid) {
+        QMessageBox::warning(this, u8("金额错误"),
+                             u8("请输入0.01至10000.00元，最多两位小数"));
+        payEdit_->setFocus();
+        payEdit_->selectAll();
+        return;
+    }
+    if (!walletController.beginConfirmation(amount.cents))
+        return;
+    updateWalletUi();
+    const auto answer = QMessageBox::question(
+        this, u8("确认充值"),
+        u8("本次模拟充值金额：%1\n确认继续吗？")
+            .arg(WalletController::formatCents(amount.cents)),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        walletController.cancelConfirmation();
+        updateWalletUi();
+        return;
+    }
+    if (!client_.isConnected()) {
+        walletController.cancelConfirmation();
+        walletController.markFailure(QStringLiteral("NETWORK_ERROR"));
+        updateWalletUi();
+        QMessageBox::warning(this, u8("网络错误"), u8("未连接到服务器，余额未改变"));
+        return;
+    }
+    const WalletRequest request = walletController.submitConfirmed();
+    if (!request.isValid())
+        return;
+    updateWalletUi();
+    walletTimeout.start();
+    client_.request(request.type, request.data, token_);
+}
+
+void UserWindow::queryPendingRecharge()
+{
+    if (!client_.isConnected()) {
+        walletController.markFailure(QStringLiteral("NETWORK_ERROR"));
+        updateWalletUi();
+        return;
+    }
+    const WalletRequest request = walletController.queryPending();
+    if (!request.isValid())
+        return;
+    updateWalletUi();
+    walletTimeout.start();
+    client_.request(request.type, request.data, token_);
+}
+
+void UserWindow::startNewRecharge()
+{
+    walletController.startNewRecharge();
+    walletBlocked = false;
+    payEdit_->clear();
+    updateWalletUi();
+    payEdit_->setFocus();
+}
+
+void UserWindow::updateWalletUi()
+{
+    const bool trusted = walletController.hasTrustedBalance();
+    QString balanceStatus;
+    if (trusted)
+        balanceStatus = walletController.balanceText();
+    else if (walletController.state() == WalletState::Loading)
+        balanceStatus = u8("余额加载中");
+    else
+        balanceStatus = u8("余额暂不可用");
+    if (headBal_)
+        headBal_->setText(trusted ? u8("余额 ") + balanceStatus : balanceStatus);
+    if (meBal_ && !user_.isEmpty())
+        meBal_->setText(user_.value("phone").toString() + u8("  ·  ") + balanceStatus);
+
+    QString hint;
+    switch (walletController.state()) {
+    case WalletState::Idle: hint = u8("余额尚未加载"); break;
+    case WalletState::Loading: hint = u8("余额加载中…"); break;
+    case WalletState::Ready: hint = u8("余额已与服务器同步"); break;
+    case WalletState::Editing: hint = u8("请输入充值金额"); break;
+    case WalletState::Confirming: hint = u8("请确认本次充值金额"); break;
+    case WalletState::Submitting: hint = u8("充值请求提交中，请勿重复操作…"); break;
+    case WalletState::Succeeded: hint = u8("充值成功，正在刷新钱包…"); break;
+    case WalletState::Failed:
+        hint = trusted ? u8("操作失败，已保留上次可信余额") : u8("余额暂不可用");
+        break;
+    case WalletState::Uncertain:
+        hint = u8("充值结果暂不确定，可查询原请求或新建一笔");
+        break;
+    case WalletState::Querying: hint = u8("正在查询原充值请求…"); break;
+    }
+    if (walletHint)
+        walletHint->setText(hint);
+
+    const bool uncertain = walletController.canQuery();
+    const bool busy = walletController.isBusy() || walletController.state() == WalletState::Confirming;
+    if (rechargeButton) {
+        rechargeButton->setText(uncertain ? u8("查询充值结果") : u8("确认充值"));
+        rechargeButton->setEnabled(!walletBlocked && (uncertain || walletController.canSubmit()));
+    }
+    if (newRechargeButton) {
+        newRechargeButton->setVisible(uncertain);
+        newRechargeButton->setEnabled(!busy);
+    }
+    if (payEdit_)
+        payEdit_->setEnabled(!walletBlocked && !busy && !uncertain);
+    for (QPushButton *button : rechargeQuickButtons)
+        button->setEnabled(!walletBlocked && !busy && !uncertain);
+}
+
+void UserWindow::handleWalletError(const QString &type, const QJsonObject &response)
+{
+    walletTimeout.stop();
+    QString errorCode = response.value("errorCode").toString();
+    if (errorCode.isEmpty())
+        errorCode = QStringLiteral("PROTOCOL_ERROR");
+    walletController.markFailure(errorCode);
+    if (errorCode == QStringLiteral("USER_FROZEN"))
+        walletBlocked = true;
+    if (errorCode == QStringLiteral("INVALID_AMOUNT") && payEdit_) {
+        payEdit_->setFocus();
+        payEdit_->selectAll();
+    }
+    qWarning().noquote()
+        << QStringLiteral("wallet action=%1 errorCode=%2 requestId=%3")
+               .arg(type, errorCode,
+                    walletController.pendingRequestId().isEmpty()
+                        ? QStringLiteral("<none>")
+                        : walletController.pendingRequestId());
+    updateWalletUi();
+    const QString message = response.value("message").toString(u8("钱包请求失败"));
+    QMessageBox::warning(this, u8("钱包提示"), message);
+    if (errorCode == QStringLiteral("USER_NOT_FOUND")
+        || errorCode == QStringLiteral("AUTH_REQUIRED")) {
+        token_.clear();
+        root_->setCurrentIndex(0);
+        loginHint_->setText(u8("请重新登录"));
+    }
 }
 
 void UserWindow::closeMyAccount()
@@ -1293,9 +1504,11 @@ void UserWindow::renderRecharge(const QJsonArray &arr)
         auto *c = card();
         auto *cl = new QVBoxLayout(c);
         cl->setContentsMargins(12, 8, 12, 8);
-        cl->addWidget(new QLabel(QString::fromUtf8("¥ %1    %2")
-                                     .arg(r.value("amount").toDouble(), 0, 'f', 2)
-                                     .arg(r.value("result").toString())));
+        const QString amount = r.value("amountCents").isDouble()
+            ? WalletController::formatCents(r.value("amountCents").toVariant().toLongLong())
+            : QStringLiteral("--");
+        cl->addWidget(new QLabel(QStringLiteral("%1    %2")
+                                     .arg(amount, r.value("result").toString())));
         auto *m = new QLabel(r.value("tradeNo").toString() + "  " + r.value("createdAt").toString());
         m->setObjectName("muted");
         cl->addWidget(m);
@@ -1507,6 +1720,11 @@ void UserWindow::onResp(QJsonObject obj)
     const QString type = obj.value("type").toString();
     const int code = obj.value("code").toInt();
     if (code != 0) {
+        if (isWalletMessage(type)) {
+            handleWalletError(type, obj);
+            wantStart_ = false;
+            return;
+        }
         const QString msg = obj.value("message").toString();
         loginHint_->setText(msg.isEmpty() ? u8("请求失败") : msg);
         QMessageBox::warning(this, u8("提示"), msg.isEmpty() ? (type + u8(" 失败")) : msg);
@@ -1520,13 +1738,20 @@ void UserWindow::onResp(QJsonObject obj)
     }
     const QJsonObject data = obj.value("data").toObject();
     if (type == "LOGIN" || type == "REGISTER") {
+        walletTimeout.stop();
+        walletController = WalletController();
+        walletBlocked = false;
         token_ = data.value("token").toString();
         showShell();
         applyUser(data.value("user").toObject());
+        loadWallet();
     } else if (type == "CLOSE_ACCOUNT") {
         poll_.stop();
+        walletTimeout.stop();
         token_.clear();
         user_ = {};
+        walletController = WalletController();
+        walletBlocked = false;
         locLat_ = 39.9644;
         locLng_ = 116.3473;
         if (addrEdit_)
@@ -1595,25 +1820,54 @@ void UserWindow::onResp(QJsonObject obj)
         applyUser(data.value("user").toObject());
         const auto o = data.value("order").toObject();
         QMessageBox::information(this, u8("结算成功"),
-                                 u8("订单 %1\n电量 %2 kWh\n费用 ¥%3\n余额 ¥%4")
+                                 u8("订单 %1\n电量 %2 kWh\n费用 ¥%3\n余额 %4")
                                      .arg(o.value("orderNo").toString())
                                      .arg(o.value("energyKwh").toDouble(), 0, 'f', 3)
                                      .arg(o.value("amount").toDouble(), 0, 'f', 2)
-                                     .arg(user_.value("balance").toDouble(), 0, 'f', 2));
+                                     .arg(walletController.balanceText()));
         currentOrder_ = {};
         switchTab(3);
     } else if (type == "LIST_ORDERS") {
         renderOrders(data.value("orders").toArray());
-    } else if (type == "RECHARGE" || type == "UPDATE_PROFILE") {
-        applyUser(data.value("user").toObject());
-        if (type == "RECHARGE")
-            QMessageBox::information(this, u8("充值成功"),
-                                     u8("流水号 %1\n金额 ¥%2")
-                                         .arg(data.value("tradeNo").toString())
-                                         .arg(data.value("amount").toDouble(), 0, 'f', 2));
-        else
-            QMessageBox::information(this, u8("ChargeHub"), obj.value("message").toString());
-    } else if (type == "LIST_RECHARGE") {
+    } else if (type == "RECHARGE" || type == "QUERY_RECHARGE") {
+        const WalletResponseStatus responseStatus = walletController.acceptRecharge(data);
+        if (responseStatus == WalletResponseStatus::Ignored
+            || responseStatus == WalletResponseStatus::Duplicate) {
+            return;
+        }
+        walletTimeout.stop();
+        if (responseStatus == WalletResponseStatus::ProtocolError) {
+            walletController.markFailure(QStringLiteral("PROTOCOL_ERROR"));
+            updateWalletUi();
+            QMessageBox::warning(this, u8("钱包提示"), u8("服务器响应不完整，余额未更新"));
+            return;
+        }
+        user_.insert("balanceCents", QJsonValue::fromVariant(walletController.balanceCents()));
+        user_.insert("balance", walletController.balanceCents() / 100.0);
+        refreshMe();
+        QMessageBox::information(this, u8("充值成功"),
+                                 u8("流水号 %1\n金额 %2\n余额 %3")
+                                     .arg(data.value("tradeNo").toString())
+                                     .arg(WalletController::formatCents(
+                                         data.value("amountCents").toVariant().toLongLong()))
+                                     .arg(walletController.balanceText()));
+        loadWallet();
+    } else if (type == "QUERY_WALLET" || type == "LIST_RECHARGE") {
+        const WalletResponseStatus responseStatus = walletController.acceptWallet(data);
+        if (responseStatus == WalletResponseStatus::Ignored)
+            return;
+        walletTimeout.stop();
+        if (responseStatus == WalletResponseStatus::ProtocolError) {
+            updateWalletUi();
+            QMessageBox::warning(this, u8("钱包提示"), u8("服务器余额响应不完整，已拒绝更新"));
+            return;
+        }
+        user_.insert("balanceCents", QJsonValue::fromVariant(walletController.balanceCents()));
+        user_.insert("balance", walletController.balanceCents() / 100.0);
+        refreshMe();
         renderRecharge(data.value("records").toArray());
+    } else if (type == "UPDATE_PROFILE") {
+        applyUser(data.value("user").toObject());
+        QMessageBox::information(this, u8("ChargeHub"), obj.value("message").toString());
     }
 }

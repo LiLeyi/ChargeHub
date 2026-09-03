@@ -9,3 +9,4 @@ docs/*.log
 docs/_vm*
 __pycache__/
 *.pyc
+*.pro.user

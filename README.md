@@ -1,5 +1,7 @@
 # ChargeHub · 东软电动汽车充电桩应用管理平台
 
+Web运营大屏与Qt钱包的后续优化范围、数据契约、阶段计划和验收标准以 **[spec.md](spec.md)** 为准。
+
 这是充电桩管理系统。运行起来会看到三类界面：
 
 | 窗口 | 是什么 | 谁开 |
@@ -8,7 +10,7 @@
 | **用户端** | 像手机的充电 App | 每个人的虚拟机都可以开，可以同时开很多个 |
 | **运营大屏** | 浏览器里的图表 | 任何人用浏览器打开即可（只看、不改数据） |
 
-只在 **Ubuntu 22.04 桌面** 里运行。不要在 Windows 里双击这些程序。
+请在 **Ubuntu 22.04或24.04桌面** 里运行。不要在 Windows 里双击这些程序。
 
 **目录**
 
@@ -38,13 +40,13 @@
 
 ## 1. 第一次准备（每人做一次）
 
-1. 安装 Ubuntu 22.04（虚拟机即可）。
+1. 安装 Ubuntu 22.04或24.04（虚拟机即可，全组统一Qt5）。
 2. 把整个 `ChargeHub` 文件夹放进 Ubuntu（U 盘，或虚拟机共享文件夹，名字叫 `ChargeHub`）。
 3. 打开「终端」，复制执行：
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential qtbase5-dev qt5-qmake libqt5sql5-sqlite python3-flask
+sudo apt install -y build-essential qtbase5-dev qt5-qmake libqt5sql5-sqlite python3-flask nodejs npm
 ```
 
 4. 再编译一次（会弹出窗口）：
@@ -137,6 +139,14 @@ CHARGEHUB_DB=$HOME/ChargeHub-Linux/admin/data/chargehub.db python3 app.py
 
 再刷新浏览器。
 
+需要在没有数据库时排练演示，可使用仓库内固定数据：
+
+```
+http://127.0.0.1:5000/?demo=1
+```
+
+页面会明确显示“演示数据”，不会把接口错误静默替换成假数据。大屏默认每5秒自动刷新，也可点“立即刷新”；断线时保留最后一次成功快照并显示“数据已过期”。
+
 三个一起拉起也可以：
 
 ```bash
@@ -158,7 +168,8 @@ bash /mnt/hgfs/ChargeHub/scripts/start.sh
 4. **停止并结算**  
    结束充电 → 待结算 → 结算。余额应减少；管理端「订单跟踪」应出现这条订单。
 5. **充值**  
-   个人中心模拟充值，余额增加；管理端能对上。
+   个人中心模拟充值，确认金额后提交；余额增加，充值流水和管理端能对上。
+   钱包显示以服务器权威余额为准。一次操作只创建一个请求编号；若网络超时显示“结果不确定”，先点“查询充值结果”查询原请求，不要直接新建充值。
 6. **大屏**  
    浏览器 `http://127.0.0.1:5000`，营收/订单数应跟着刚才的结算变（刷新即可）。
 7. **管理端操作**  
@@ -311,7 +322,7 @@ cd ~/ChargeHub-Linux/admin && ./run.sh
 3. 看窗口 **最底部状态栏**，类似：
 
 ```text
-用户端请填写  192.168.1.8:8888    数据库 /home/bit/ChargeHub-Linux/admin/data/chargehub.db
+用户端请填写  192.168.1.8:8888    数据库 …/ChargeHub-Linux/admin/data/chargehub.db
 ```
 
 把 `192.168.1.8:8888` 发到群里（以你屏幕上的为准）。
@@ -409,7 +420,10 @@ cd ~/ChargeHub-Linux/user && ./run.sh
 | `adminserver/src/database.*` | SQLite 唯一写入口 | `query` / `one` / `execute` | 改表要同步 `schema.sql` |
 | `adminserver/src/mainwindow.*` | 运营界面 | 直接调 Dispatch，不走 Socket | 后台页面 |
 | `adminserver/src/chartwidget.*` | 自绘图表 | `setPoints` / `setBars` / `setSlices` | 仅显示 |
-| `dashboard/app.py` | Flask 只读大屏 | `GET /` `GET /api/overview` `GET /api/analysis` | 图表页；禁止 UPDATE 订单 |
+| `dashboard/app.py` | Flask 只读大屏 | `GET /` `GET /api/dashboard` | 快照接口；禁止 UPDATE 订单 |
+| `dashboard/dashboarddata.js` | 大屏刷新控制与数据源 | `DashboardController` | 防重叠、错误恢复和演示数据切换 |
+| `dashboard/dashboardmodel.js` | 大屏纯数据规则 | 格式化与7/30日、1/6/24小时选择 | 不操作DOM，可直接运行Node测试 |
+| `dashboard/dashboard.js` | 图表与安全DOM渲染 | 页面事件 | 数据库文本只用 `textContent` |
 | `ml/forecast.py` | 负荷预测 | 写 `load_forecast` 等分析表 | 不改余额、不改桩状态 |
 | `database/schema.sql` | 表结构说明 | 与 C++ 建表一致 | 改库先改此文件再改 C++ |
 | `protocol/messages.md` | 报文 type 列表 | 联调对照表 | 新增 type 必须更新此文件 |
@@ -460,6 +474,37 @@ C++ 启动时 `CREATE IF NOT EXISTS` 并给旧库补列，不以删除用户数�
 ---
 
 ## 8. 改代码与协作约定
+
+### 自动化测试
+
+源码根目录下执行：
+
+```bash
+# Flask接口、临时SQLite夹具和规格测试
+python3 -m unittest discover -s tests -p 'test*.py' -v
+
+# 大屏纯JavaScript逻辑
+npm --prefix dashboard test
+
+# Qt长度前缀协议兼容测试（钱包后续共用，建议在源码外构建）
+mkdir -p /tmp/chargehubwallettest
+cd /tmp/chargehubwallettest
+qmake 你的ChargeHub目录/tests/wallettest.pro
+make -j2
+./wallettest -txt
+```
+
+无桌面的Ubuntu服务器使用：`QT_QPA_PLATFORM=offscreen ./wallettest -txt`。钱包测试同时覆盖旧库整数分迁移、充值事务回滚、幂等、两个TCP连接的并发重复请求、结果查询、版本2报文、整数金额解析、服务器权威余额和超时状态恢复。
+
+Python测试每次创建独立临时数据库，不能把测试指向联调库。总工程 `qmake` 也会编译Qt测试目标。
+
+交付前还要运行30分钟大屏稳定性检查。它使用自动创建的临时数据库，每5秒读取一次真实`/api/dashboard`路由，不会修改联调数据：
+
+```bash
+python3 tests/soaktest.py --duration-seconds 1800 --interval-seconds 5
+```
+
+输出中的`passed`必须为`true`，`failures`和`slowResponses`必须为0。完整命令、通过条件和人工联调步骤见 **[docs/releasechecklist.md](docs/releasechecklist.md)**。
 
 改完源码后在 Ubuntu 执行：
 

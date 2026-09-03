@@ -10,6 +10,7 @@
  */
 
 #include "client.h"
+#include "walletcontroller.h"
 
 #include <QComboBox>
 #include <QJsonArray>
@@ -58,6 +59,12 @@ private:
     void submitReview();
     void openNav(const QJsonObject &station);
     void refreshMe();
+    void loadWallet();
+    void submitRecharge();
+    void queryPendingRecharge();
+    void startNewRecharge();
+    void updateWalletUi();
+    void handleWalletError(const QString &type, const QJsonObject &response);
     void pickAvatar();
     void clearAvatar();
     void showAvatar(const QJsonObject &u);
@@ -78,6 +85,8 @@ private:
 
     Client client_;
     QTimer poll_;
+    WalletController walletController;
+    QTimer walletTimeout;
     QString token_;
     QJsonObject user_;
     QJsonObject currentStation_;
@@ -125,6 +134,11 @@ private:
     QLabel *meBal_ = nullptr;
     QLineEdit *nickEdit_ = nullptr;
     QLineEdit *payEdit_ = nullptr;
+    QLabel *walletHint = nullptr;
+    QPushButton *rechargeButton = nullptr;
+    QPushButton *newRechargeButton = nullptr;
+    QList<QPushButton *> rechargeQuickButtons;
+    bool walletBlocked = false;
     QListWidget *nav_ = nullptr;
 
     QLabel *rvTitle_ = nullptr;

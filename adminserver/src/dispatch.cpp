@@ -3,12 +3,14 @@
  * @brief 全部业务规则：用户端协议与管理端同进程调用都走这里
  */
 #include "dispatch.h"
+#include "rechargetransaction.h"
 
 #include <algorithm>
 #include <QBuffer>
 #include <QCryptographicHash>
 #include <QDate>
 #include <QDateTime>
+#include <QDebug>
 #include <QHash>
 #include <QImage>
 #include <QIODevice>
@@ -94,6 +96,64 @@ static QByteArray jpegAvatar(const QByteArray &raw, QString *err)
 
 static double money(double v) { return qRound(v * 100.0) / 100.0; }
 
+static bool isWalletRequest(const QString &type)
+{
+    return type == QStringLiteral("RECHARGE")
+        || type == QStringLiteral("QUERY_RECHARGE")
+        || type == QStringLiteral("QUERY_WALLET")
+        || type == QStringLiteral("LIST_RECHARGE");
+}
+
+static void logWalletError(
+    const QString &type, const QString &errorCode, const QString &requestId)
+{
+    const QString safeRequestId = RechargeTransaction::isValidRequestId(requestId)
+        ? requestId
+        : QStringLiteral("<invalid-or-legacy>");
+    qWarning().noquote()
+        << QStringLiteral("wallet action=%1 errorCode=%2 requestId=%3")
+               .arg(type, errorCode, safeRequestId);
+}
+
+static QJsonObject rechargeError(RechargeStatus status)
+{
+    switch (status) {
+    case RechargeStatus::InvalidAmount:
+        return QJsonObject{{"errorCode", "INVALID_AMOUNT"}, {"httpCode", 400},
+                           {"error", QString::fromUtf8("充值金额格式或范围不正确")}};
+    case RechargeStatus::InvalidRequestId:
+        return QJsonObject{{"errorCode", "INVALID_REQUEST_ID"}, {"httpCode", 400},
+                           {"error", QString::fromUtf8("充值请求编号无效或已用于其他金额")}};
+    case RechargeStatus::UserNotFound:
+        return QJsonObject{{"errorCode", "USER_NOT_FOUND"}, {"httpCode", 404},
+                           {"error", QString::fromUtf8("用户不存在，请重新登录")}};
+    case RechargeStatus::UserFrozen:
+        return QJsonObject{{"errorCode", "USER_FROZEN"}, {"httpCode", 403},
+                           {"error", QString::fromUtf8("账号已冻结，无法充值")}};
+    case RechargeStatus::NotFound:
+        return QJsonObject{{"errorCode", "RECHARGE_NOT_FOUND"}, {"httpCode", 404},
+                           {"error", QString::fromUtf8("尚未查到该笔充值结果")}};
+    case RechargeStatus::StorageError:
+        return QJsonObject{{"errorCode", "STORAGE_ERROR"}, {"httpCode", 500},
+                           {"error", QString::fromUtf8("充值数据保存失败，请稍后重试")}};
+    case RechargeStatus::Succeeded:
+        break;
+    }
+    return QJsonObject();
+}
+
+static QJsonObject publicRecharge(const RechargeResult &result)
+{
+    return QJsonObject{
+        {"requestId", result.requestId},
+        {"tradeNo", result.tradeNo},
+        {"amountCents", QJsonValue::fromVariant(result.amountCents)},
+        {"balanceCents", QJsonValue::fromVariant(result.balanceCents)},
+        {"status", "succeeded"},
+        {"replayed", result.replayed},
+    };
+}
+
 static QString nowStr()
 {
     return QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
@@ -174,9 +234,13 @@ QJsonObject Dispatch::ok(const QString &type, int seq, const QString &msg, const
     return QJsonObject{{"type", type}, {"seq", seq}, {"code", 0}, {"message", msg}, {"data", data}};
 }
 
-QJsonObject Dispatch::fail(const QString &type, int seq, int code, const QString &msg) const
+QJsonObject Dispatch::fail(
+    const QString &type, int seq, int code, const QString &msg, const QString &errorCode) const
 {
-    return QJsonObject{{"type", type}, {"seq", seq}, {"code", code}, {"message", msg}, {"data", QJsonObject()}};
+    QJsonObject response{{"type", type}, {"seq", seq}, {"code", code}, {"message", msg}, {"data", QJsonObject()}};
+    if (!errorCode.isEmpty())
+        response.insert("errorCode", errorCode);
+    return response;
 }
 
 QString Dispatch::issueToken(int userId)
@@ -242,7 +306,8 @@ QJsonObject Dispatch::publicUser(const QVariantMap &u) const
         {"nickname", u.value("nickname").toString()},
         {"avatarPath", u.value("avatar_path").toString()},
         {"hasAvatar", false},
-        {"balance", money(u.value("balance").toDouble())},
+        {"balance", u.value("balance_cents").toLongLong() / 100.0},
+        {"balanceCents", QJsonValue::fromVariant(u.value("balance_cents").toLongLong())},
         {"status", u.value("status").toString()},
         {"createdAt", u.value("created_at").toString()},
         {"address", u.value("address").toString()},
@@ -265,6 +330,29 @@ QJsonObject Dispatch::handle(const QJsonObject &req)
     const QString type = req.value("type").toString();
     const int seq = req.value("seq").toInt();
     const QJsonObject data = req.value("data").toObject();
+    const QJsonValue protocolVersion = req.value("protocolVersion");
+    if (isWalletRequest(type) && !protocolVersion.isUndefined()
+        && (!protocolVersion.isDouble()
+            || (protocolVersion.toInt(-1) != 1 && protocolVersion.toInt(-1) != 2))) {
+        logWalletError(type, QStringLiteral("PROTOCOL_ERROR"), data.value("requestId").toString());
+        return fail(type, seq, 400, QString::fromUtf8("不支持的钱包协议版本"),
+                    QStringLiteral("PROTOCOL_ERROR"));
+    }
+    if (isWalletRequest(type) && protocolVersion.toInt(-1) == 2
+        && ((type == QStringLiteral("RECHARGE")
+             && (!data.value("amountCents").isDouble() || !data.value("requestId").isString()))
+            || (type == QStringLiteral("QUERY_RECHARGE")
+                && !data.value("requestId").isString()))) {
+        logWalletError(type, QStringLiteral("PROTOCOL_ERROR"), data.value("requestId").toString());
+        return fail(type, seq, 400, QString::fromUtf8("钱包协议字段不完整"),
+                    QStringLiteral("PROTOCOL_ERROR"));
+    }
+    if (isWalletRequest(type)
+        && QJsonDocument(req).toJson(QJsonDocument::Compact).size() > 4 * 1024) {
+        logWalletError(type, QStringLiteral("PROTOCOL_ERROR"), data.value("requestId").toString());
+        return fail(type, seq, 400, QString::fromUtf8("钱包请求过大"),
+                    QStringLiteral("PROTOCOL_ERROR"));
+    }
     if (type == "LOGIN") {
         const QString phone = data.value("phone").toString().trimmed();
         const QString pwd = data.value("password").toString();
@@ -302,8 +390,8 @@ QJsonObject Dispatch::handle(const QJsonObject &req)
             QCryptographicHash::hash(pwd.toUtf8(), QCryptographicHash::Sha256).toHex());
         const QString nick = QString::fromUtf8("用户") + phone.right(4);
         const int uid = db_->execute(
-            "INSERT INTO user(phone,nickname,avatar_path,password_hash,balance,status,created_at) VALUES(?,?,?,?,?,?,?)",
-            {phone, nick, "", hash, 0.0, QString::fromUtf8("正常"), nowStr()});
+            "INSERT INTO user(phone,nickname,avatar_path,password_hash,balance,balance_cents,status,created_at) VALUES(?,?,?,?,?,?,?,?)",
+            {phone, nick, "", hash, 0.0, 0, QString::fromUtf8("正常"), nowStr()});
         auto user = db_->one("SELECT * FROM user WHERE id=?", {uid});
         const QString token = issueToken(uid);
         return ok(type, seq, QString::fromUtf8("注册成功"),
@@ -311,10 +399,17 @@ QJsonObject Dispatch::handle(const QJsonObject &req)
     }
     QString err;
     const auto user = requireUser(req.value("token").toString(), &err);
-    if (user.isEmpty())
-        return fail(type, seq,
-                     (err.contains(QString::fromUtf8("冻结")) || err.contains(QString::fromUtf8("注销"))) ? 403 : 401,
-                     err);
+    if (user.isEmpty()) {
+        const bool frozen = err.contains(QString::fromUtf8("冻结"));
+        const bool closed = err.contains(QString::fromUtf8("注销"));
+        const QString errorCode = frozen ? QStringLiteral("USER_FROZEN")
+                                         : (closed ? QStringLiteral("USER_NOT_FOUND")
+                                                   : QStringLiteral("AUTH_REQUIRED"));
+        if (isWalletRequest(type))
+            logWalletError(type, errorCode, data.value("requestId").toString());
+        return fail(type, seq, (frozen || closed) ? 403 : 401, err,
+                    errorCode);
+    }
 
     QJsonObject body;
     QString message = "ok";
@@ -325,9 +420,26 @@ QJsonObject Dispatch::handle(const QJsonObject &req)
         message = QString::fromUtf8("保存成功");
     } else if (type == "RECHARGE") {
         body = recharge(user, data);
-        if (body.contains("error"))
-            return fail(type, seq, 400, body.value("error").toString());
+        if (body.contains("error")) {
+            logWalletError(type, body.value("errorCode").toString(), data.value("requestId").toString());
+            return fail(type, seq, body.value("httpCode").toInt(400), body.value("error").toString(),
+                        body.value("errorCode").toString());
+        }
         message = QString::fromUtf8("充值成功");
+    } else if (type == "QUERY_RECHARGE") {
+        body = queryRecharge(user, data);
+        if (body.contains("error")) {
+            logWalletError(type, body.value("errorCode").toString(), data.value("requestId").toString());
+            return fail(type, seq, body.value("httpCode").toInt(400), body.value("error").toString(),
+                        body.value("errorCode").toString());
+        }
+    } else if (type == "QUERY_WALLET") {
+        body = listRecharge(user);
+        if (body.contains("error")) {
+            logWalletError(type, body.value("errorCode").toString(), QString());
+            return fail(type, seq, body.value("httpCode").toInt(500), body.value("error").toString(),
+                        body.value("errorCode").toString());
+        }
     } else if (type == "QUERY_STATIONS") {
         body = queryStations(user, data);
     } else if (type == "CLOSE_ACCOUNT") {
@@ -361,6 +473,11 @@ QJsonObject Dispatch::handle(const QJsonObject &req)
         body = listOrders(user);
     } else if (type == "LIST_RECHARGE") {
         body = listRecharge(user);
+        if (body.contains("error")) {
+            logWalletError(type, body.value("errorCode").toString(), QString());
+            return fail(type, seq, body.value("httpCode").toInt(500), body.value("error").toString(),
+                        body.value("errorCode").toString());
+        }
     } else if (type == "RESERVE_PILE") {
         body = reservePile(user, data);
         if (body.contains("errorCode"))
@@ -437,20 +554,50 @@ QJsonObject Dispatch::updateProfile(const QVariantMap &user, const QJsonObject &
 
 QJsonObject Dispatch::recharge(const QVariantMap &user, const QJsonObject &data)
 {
-    bool ok = false;
-    const double amount = data.value("amount").toVariant().toDouble(&ok);
-    if (!ok || amount <= 0 || amount > 10000)
-        return QJsonObject{{"error", QString::fromUtf8("单笔充值须大于 0 且不超过 10000 元")}};
-    const double nb = money(user.value("balance").toDouble() + amount);
-    const QString t = nowStr();
-    db_->execute("UPDATE user SET balance=? WHERE id=?", {nb, user.value("id")});
-    db_->execute("INSERT INTO recharge_log(user_id,amount,result,created_at) VALUES(?,?,?,?)",
-                 {user.value("id"), money(amount), QString::fromUtf8("成功"), t});
-    const auto last = db_->one("SELECT id FROM recharge_log WHERE user_id=? ORDER BY id DESC LIMIT 1",
-                               {user.value("id")});
-    const QString tradeNo = QString("RC%1").arg(last.value("id").toInt(), 8, 10, QChar('0'));
-    auto u = db_->one("SELECT * FROM user WHERE id=?", {user.value("id")});
-    return QJsonObject{{"user", publicUser(u)}, {"tradeNo", tradeNo}, {"amount", money(amount)}};
+    qint64 amountCents = 0;
+    QString requestId = data.value("requestId").toString().trimmed();
+    if (data.contains("amountCents")) {
+        if (!data.value("amountCents").isDouble())
+            return rechargeError(RechargeStatus::InvalidAmount);
+        const double rawCents = data.value("amountCents").toDouble(-1);
+        if (!qIsFinite(rawCents) || rawCents < 1 || rawCents > 1000000
+            || rawCents != qFloor(rawCents)) {
+            return rechargeError(RechargeStatus::InvalidAmount);
+        }
+        amountCents = qRound64(rawCents);
+    } else {
+        if (!data.value("amount").isDouble())
+            return rechargeError(RechargeStatus::InvalidAmount);
+        bool parsed = false;
+        const double legacyAmount = data.value("amount").toVariant().toDouble(&parsed);
+        const double scaled = legacyAmount * 100.0;
+        if (!parsed || !qIsFinite(scaled) || scaled < 1 || scaled > 1000000
+            || qAbs(scaled - qFloor(scaled + 0.5)) > 0.000001) {
+            return rechargeError(RechargeStatus::InvalidAmount);
+        }
+        amountCents = qint64(qFloor(scaled + 0.5));
+        requestId = QStringLiteral("legacy-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    }
+
+    RechargeTransaction transaction(db_->path());
+    const RechargeResult result = transaction.applyRecharge(user.value("id").toInt(), amountCents, requestId);
+    if (result.status != RechargeStatus::Succeeded)
+        return rechargeError(result.status);
+    auto refreshedUser = db_->one("SELECT * FROM user WHERE id=?", {user.value("id")});
+    QJsonObject response = publicRecharge(result);
+    response.insert("amount", result.amountCents / 100.0);
+    response.insert("user", publicUser(refreshedUser));
+    return response;
+}
+
+QJsonObject Dispatch::queryRecharge(const QVariantMap &user, const QJsonObject &data)
+{
+    const QString requestId = data.value("requestId").toString().trimmed();
+    RechargeTransaction transaction(db_->path());
+    const RechargeResult result = transaction.queryRecharge(user.value("id").toInt(), requestId);
+    if (result.status != RechargeStatus::Succeeded)
+        return rechargeError(result.status);
+    return publicRecharge(result);
 }
 
 QJsonObject Dispatch::queryStations(const QVariantMap &user, const QJsonObject &data)
@@ -713,7 +860,7 @@ QJsonObject Dispatch::startCharge(const QVariantMap &user, const QJsonObject &da
     expireReservations();
     if (!openOrder(user.value("id").toInt()).isEmpty())
         return QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("您有未完成的充电订单，请先结算")}};
-    if (user.value("balance").toDouble() <= 0)
+    if (user.value("balance_cents").toLongLong() <= 0)
         return QJsonObject{{"errorCode", 402}, {"error", QString::fromUtf8("余额不足，请先充值")}};
     const int pileId = data.value("pileId").toInt();
     auto pile = db_->one("SELECT * FROM pile WHERE id=?", {pileId});
@@ -779,10 +926,13 @@ QJsonObject Dispatch::settle(const QVariantMap &userIn)
     if (order.isEmpty())
         return QJsonObject{{"errorCode", 404}, {"error", QString::fromUtf8("没有待结算订单")}};
     auto user = db_->one("SELECT * FROM user WHERE id=?", {userIn.value("id")});
-    if (user.value("balance").toDouble() + 1e-6 < order.value("amount").toDouble())
+    const qint64 orderAmountCents = qRound64(order.value("amount").toDouble() * 100.0);
+    const qint64 balanceCents = user.value("balance_cents").toLongLong();
+    if (balanceCents < orderAmountCents)
         return QJsonObject{{"errorCode", 402}, {"error", QString::fromUtf8("余额不足，请先充值后再结算")}};
-    const double nb = money(user.value("balance").toDouble() - order.value("amount").toDouble());
-    db_->execute("UPDATE user SET balance=? WHERE id=?", {nb, user.value("id")});
+    const qint64 newBalanceCents = balanceCents - orderAmountCents;
+    db_->execute("UPDATE user SET balance_cents=?,balance=? WHERE id=?",
+                 {newBalanceCents, newBalanceCents / 100.0, user.value("id")});
     db_->execute("UPDATE charge_order SET status=? WHERE id=?", {QString::fromUtf8("已完成"), order.value("id")});
     user = db_->one("SELECT * FROM user WHERE id=?", {user.value("id")});
     auto pile = db_->one("SELECT * FROM pile WHERE id=?", {order.value("pile_id")});
@@ -1006,13 +1156,24 @@ QJsonObject Dispatch::listRecharge(const QVariantMap &user)
     for (const auto &r : rows) {
         arr.append(QJsonObject{
             {"id", r.value("id").toInt()},
-            {"tradeNo", QString("RC%1").arg(r.value("id").toInt(), 8, 10, QChar('0'))},
+            {"tradeNo", r.value("trade_no").toString()},
             {"amount", r.value("amount").toDouble()},
+            {"amountCents", QJsonValue::fromVariant(r.value("amount_cents").toLongLong())},
+            {"balanceAfterCents", QJsonValue::fromVariant(r.value("balance_after_cents").toLongLong())},
+            {"requestId", r.value("request_id").toString()},
+            {"status", r.value("status").toString()},
             {"result", r.value("result").toString()},
             {"createdAt", r.value("created_at").toString()},
         });
     }
-    return QJsonObject{{"records", arr}, {"balance", money(user.value("balance").toDouble())}};
+    const auto refreshedUser = db_->one("SELECT balance,balance_cents FROM user WHERE id=?", {user.value("id")});
+    if (refreshedUser.isEmpty())
+        return rechargeError(RechargeStatus::StorageError);
+    return QJsonObject{
+        {"records", arr},
+        {"balance", refreshedUser.value("balance_cents").toLongLong() / 100.0},
+        {"balanceCents", QJsonValue::fromVariant(refreshedUser.value("balance_cents").toLongLong())},
+    };
 }
 
 QJsonObject Dispatch::reservePile(const QVariantMap &user, const QJsonObject &data)
