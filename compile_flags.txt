@@ -1,0 +1,9 @@
+-std=c++17
+-DQT_CORE_LIB
+-DQT_GUI_LIB
+-DQT_WIDGETS_LIB
+-DQT_NETWORK_LIB
+-DQT_SQL_LIB
+-Icommon
+-Iadminserver/src
+-Iuserclient/src

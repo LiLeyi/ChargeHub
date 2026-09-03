@@ -1,0 +1,11 @@
+*.o
+moc_*
+Makefile
+adminserver/adminserver
+userclient/userclient
+**/data/*.db-journal
+dist/
+docs/*.log
+docs/_vm*
+__pycache__/
+*.pyc
