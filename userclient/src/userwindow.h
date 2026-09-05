@@ -28,6 +28,8 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+class QNetworkAccessManager;
+
 class UserWindow : public QMainWindow {
     Q_OBJECT
 public:
@@ -57,7 +59,10 @@ private:
     void openPileReview(const QJsonObject &pile);
     void setReviewStars(int n);
     void submitReview();
+    void showStationLocation(const QJsonObject &station);
     void openNav(const QJsonObject &station);
+    void queryTencentRoute(const QJsonObject &station, const QString &mode,
+                           QLabel *resultLabel, QPushButton *queryButton);
     void refreshMe();
     void pickAvatar();
     void clearAvatar();
@@ -79,6 +84,7 @@ private:
     static void clearBox(QLayout *lay);
 
     Client client_;
+    QNetworkAccessManager *mapNetwork_ = nullptr;
     QTimer poll_;
     QString token_;
     QJsonObject user_;

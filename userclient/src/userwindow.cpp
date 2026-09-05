@@ -4,24 +4,35 @@
  */
 #include "userwindow.h"
 
+#if __has_include("tencentmap_credentials.h")
+#include "tencentmap_credentials.h"
+#endif
+
 #include <algorithm>
 #include <QAbstractItemView>
 #include <QButtonGroup>
 #include <QVector>
 #include <QBuffer>
 #include <QDesktopServices>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QImage>
 #include <QIODevice>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QListView>
 #include <QListWidget>
 #include <QComboBox>
 #include <QMessageBox>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QPixmap>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSizePolicy>
@@ -30,9 +41,148 @@
 #include <QStyle>
 #include <QTextCursor>
 #include <QUrl>
+#include <QUrlQuery>
 #include <QSettings>
+#include <QCryptographicHash>
 
 static QString u8(const char *s) { return QString::fromUtf8(s); }
+
+#ifndef CHARGEHUB_TENCENT_MAP_KEY
+// 腾讯位置服务的 key 可以放在 tencentmap_credentials.h 或环境变量中覆盖。
+#define CHARGEHUB_TENCENT_MAP_KEY "2L2BZ-7WE6C-ZFP2W-A23GC-5WZK2-KHBGF"
+#endif
+
+#ifndef CHARGEHUB_TENCENT_MAP_SK
+#define CHARGEHUB_TENCENT_MAP_SK ""
+#endif
+
+namespace {
+
+QString tencentMapKey()
+{
+    const QString env = qEnvironmentVariable("CHARGEHUB_TENCENT_MAP_KEY").trimmed();
+    return env.isEmpty() ? QString::fromLatin1(CHARGEHUB_TENCENT_MAP_KEY) : env;
+}
+
+QString tencentMapSk()
+{
+    const QString env = qEnvironmentVariable("CHARGEHUB_TENCENT_MAP_SK").trimmed();
+    return env.isEmpty() ? QString::fromLatin1(CHARGEHUB_TENCENT_MAP_SK) : env;
+}
+
+QString coordinateText(double lat, double lng)
+{
+    return QString::number(lat, 'f', 6) + "," + QString::number(lng, 'f', 6);
+}
+
+QString encodedQuery(const QList<QPair<QString, QString>> &params)
+{
+    QList<QPair<QString, QString>> sorted = params;
+    std::sort(sorted.begin(), sorted.end(), [](const auto &a, const auto &b) {
+        if (a.first == b.first)
+            return a.second < b.second;
+        return a.first < b.first;
+    });
+
+    QStringList parts;
+    parts.reserve(sorted.size());
+    for (const auto &p : sorted) {
+        parts.append(QString::fromLatin1(QUrl::toPercentEncoding(p.first)) + "="
+                     + QString::fromLatin1(QUrl::toPercentEncoding(p.second)));
+    }
+    return parts.join('&');
+}
+
+QUrl tencentApiUrl(const QString &path, QList<QPair<QString, QString>> params)
+{
+    params.append({QStringLiteral("key"), tencentMapKey()});
+    const QString query = encodedQuery(params);
+    QString full = QStringLiteral("https://apis.map.qq.com") + path + "?" + query;
+    const QString sk = tencentMapSk();
+    if (!sk.isEmpty()) {
+        const QByteArray source = (path + "?" + query + sk).toUtf8();
+        const QString sig = QString::fromLatin1(QCryptographicHash::hash(source, QCryptographicHash::Md5).toHex());
+        full += "&sig=" + sig;
+    }
+    return QUrl(full);
+}
+
+QUrl tencentStaticMapUrl(const QJsonObject &station)
+{
+    const double lat = station.value("lat").toDouble();
+    const double lng = station.value("lng").toDouble();
+    const QString marker = QStringLiteral("size:large|color:red|label:S|%1,%2")
+                               .arg(QString::number(lat, 'f', 6), QString::number(lng, 'f', 6));
+    return tencentApiUrl(QStringLiteral("/ws/staticmap/v2/"),
+                         {{QStringLiteral("center"), coordinateText(lat, lng)},
+                          {QStringLiteral("zoom"), QStringLiteral("16")},
+                          {QStringLiteral("size"), QStringLiteral("640*360")},
+                          {QStringLiteral("scale"), QStringLiteral("2")},
+                          {QStringLiteral("markers"), marker}});
+}
+
+QUrl tencentRouteUri(const QJsonObject &station, const QJsonObject &origin, const QString &mode)
+{
+    QUrl url(QStringLiteral("https://apis.map.qq.com/uri/v1/routeplan/"));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("type"), mode);
+    query.addQueryItem(QStringLiteral("from"), u8("我的位置"));
+    query.addQueryItem(QStringLiteral("fromcoord"),
+                       coordinateText(origin.value("lat").toDouble(), origin.value("lng").toDouble()));
+    query.addQueryItem(QStringLiteral("to"), station.value("name").toString());
+    query.addQueryItem(QStringLiteral("tocoord"),
+                       coordinateText(station.value("lat").toDouble(), station.value("lng").toDouble()));
+    query.addQueryItem(QStringLiteral("referer"), QStringLiteral("ChargeHub"));
+    url.setQuery(query);
+    return url;
+}
+
+QString routeApiPath(const QString &mode)
+{
+    if (mode == QStringLiteral("walk"))
+        return QStringLiteral("/ws/direction/v1/walking/");
+    if (mode == QStringLiteral("bike"))
+        return QStringLiteral("/ws/direction/v1/bicycling/");
+    if (mode == QStringLiteral("bus"))
+        return QStringLiteral("/ws/direction/v1/transit/");
+    return QStringLiteral("/ws/direction/v1/driving/");
+}
+
+QString routeModeName(const QString &mode)
+{
+    if (mode == QStringLiteral("walk"))
+        return u8("步行");
+    if (mode == QStringLiteral("bike"))
+        return u8("骑行");
+    if (mode == QStringLiteral("bus"))
+        return u8("公交");
+    return u8("驾车");
+}
+
+QString durationText(int seconds)
+{
+    if (seconds <= 0)
+        return u8("未知");
+    const int minutes = qMax(1, qRound(seconds / 60.0));
+    if (minutes < 60)
+        return u8("约 %1 分钟").arg(minutes);
+    return u8("约 %1 小时 %2 分钟").arg(minutes / 60).arg(minutes % 60);
+}
+
+bool validCoordinate(double lat, double lng)
+{
+    return qIsFinite(lat) && qIsFinite(lng) && lat >= -90.0 && lat <= 90.0 && lng >= -180.0 && lng <= 180.0
+           && (qAbs(lat) > 1e-9 || qAbs(lng) > 1e-9);
+}
+
+QNetworkRequest mapRequest(const QUrl &url)
+{
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("ChargeHub/1.0"));
+    return request;
+}
+
+} // namespace
 
 static QString goldStars(int n)
 {
@@ -88,6 +238,7 @@ UserWindow::UserWindow(QWidget *parent) : QMainWindow(parent)
     resize(1180, 760);
     root_ = new QStackedWidget;
     setCentralWidget(root_);
+    mapNetwork_ = new QNetworkAccessManager(this);
     root_->addWidget(buildLogin());
     root_->addWidget(buildShell());
 
@@ -1157,18 +1308,20 @@ void UserWindow::renderStations(const QJsonObject &data)
         addr->setObjectName("muted");
         addr->setWordWrap(true);
         cl->addWidget(addr);
-        auto *meta = new QLabel(QString::fromUtf8("¥%1 / 度    %2 km    快充 %3  ·  慢充 %4    ★%5")
+        auto *meta = new QLabel(QString::fromUtf8("¥%1 / 度    %2 km    快充 %3  ·  慢充 %4    ★%5\n位置：%6, %7")
                                     .arg(s.value("pricePerKwh").toDouble(), 0, 'f', 2)
                                     .arg(s.value("distanceKm").toDouble(), 0, 'f', 1)
                                     .arg(s.value("fastPiles").toInt())
                                     .arg(s.value("slowPiles").toInt())
-                                    .arg(s.value("score").toDouble(), 0, 'f', 1));
+                                    .arg(s.value("score").toDouble(), 0, 'f', 1)
+                                    .arg(s.value("lat").toDouble(), 0, 'f', 6)
+                                    .arg(s.value("lng").toDouble(), 0, 'f', 6));
         meta->setObjectName("muted");
         cl->addWidget(meta);
         auto *btns = new QHBoxLayout;
-        auto *nav = new QPushButton(u8("导航"));
+        auto *nav = new QPushButton(u8("位置 / 导航"));
         nav->setObjectName("ghost");
-        nav->setMaximumWidth(88);
+        nav->setMaximumWidth(120);
         auto *go = new QPushButton(u8("选桩充电"));
         go->setMaximumWidth(120);
         connect(nav, &QPushButton::clicked, this, [this, s] { openNav(s); });
@@ -1445,8 +1598,18 @@ void UserWindow::renderReservations(const QJsonArray &arr)
         connect(cancel, &QPushButton::clicked, this, [this] {
             client_.request("CANCEL_RESERVE", {}, token_);
         });
+        auto *navigate = new QPushButton(u8("位置 / 导航"));
+        navigate->setObjectName("ghost");
+        navigate->setMaximumWidth(120);
+        connect(navigate, &QPushButton::clicked, this, [this, r] {
+            openNav(QJsonObject{{"name", r.value("stationName").toString()},
+                                {"address", r.value("address").toString()},
+                                {"lat", r.value("lat").toDouble()},
+                                {"lng", r.value("lng").toDouble()}});
+        });
         actions->addWidget(view);
         actions->addWidget(start);
+        actions->addWidget(navigate);
         actions->addWidget(cancel);
         actions->addStretch();
         cl->addLayout(actions);
@@ -1633,18 +1796,173 @@ void UserWindow::submitReview()
 
 void UserWindow::openNav(const QJsonObject &station)
 {
-    const auto c = coord();
-    const QString dest = station.value("name").toString();
-    const QString url = QStringLiteral(
-                            "https://map.qq.com/nav/drive#routes/page?sword=%1&spointx=%2&spointy=%3&eword=%4&epointx=%5&epointy=%6")
-                            .arg(QString::fromUtf8(QUrl::toPercentEncoding(u8("当前位置"))))
-                            .arg(c.value("lng").toDouble(), 0, 'f', 6)
-                            .arg(c.value("lat").toDouble(), 0, 'f', 6)
-                            .arg(QString::fromUtf8(QUrl::toPercentEncoding(dest)))
-                            .arg(station.value("lng").toDouble(), 0, 'f', 6)
-                            .arg(station.value("lat").toDouble(), 0, 'f', 6);
-    if (!QDesktopServices::openUrl(QUrl(url)))
-        QProcess::startDetached(QStringLiteral("xdg-open"), {url});
+    showStationLocation(station);
+}
+
+void UserWindow::showStationLocation(const QJsonObject &station)
+{
+    const double lat = station.value("lat").toDouble();
+    const double lng = station.value("lng").toDouble();
+    if (!validCoordinate(lat, lng)) {
+        QMessageBox::warning(this, u8("位置不可用"), u8("该充电站暂时没有有效的经纬度信息。"));
+        return;
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(u8("充电站位置与导航"));
+    dialog.resize(720, 620);
+    auto *outer = new QVBoxLayout(&dialog);
+    outer->setContentsMargins(18, 18, 18, 16);
+    outer->setSpacing(10);
+
+    auto *title = new QLabel(station.value("name").toString());
+    title->setObjectName("title");
+    outer->addWidget(title);
+
+    auto *info = new QLabel(
+        QString::fromUtf8("%1\n坐标：%2, %3")
+            .arg(station.value("address").toString())
+            .arg(lat, 0, 'f', 6)
+            .arg(lng, 0, 'f', 6));
+    info->setObjectName("muted");
+    info->setWordWrap(true);
+    outer->addWidget(info);
+
+    auto *map = new QLabel(u8("正在加载腾讯地图…"));
+    map->setAlignment(Qt::AlignCenter);
+    map->setMinimumSize(640, 360);
+    map->setStyleSheet(QStringLiteral("background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;"));
+    map->setScaledContents(false);
+    outer->addWidget(map, 1);
+
+    auto *routeBar = new QHBoxLayout;
+    routeBar->setSpacing(8);
+    routeBar->addWidget(new QLabel(u8("出行方式")));
+    auto *mode = new QComboBox;
+    mode->addItem(u8("驾车"), QStringLiteral("drive"));
+    mode->addItem(u8("步行"), QStringLiteral("walk"));
+    mode->addItem(u8("骑行"), QStringLiteral("bike"));
+    mode->addItem(u8("公交"), QStringLiteral("bus"));
+    mode->setMinimumWidth(110);
+    prepCombo(mode);
+    routeBar->addWidget(mode);
+    auto *route = new QPushButton(u8("查询路线"));
+    route->setObjectName("primary");
+    routeBar->addWidget(route);
+    auto *open = new QPushButton(u8("打开腾讯地图"));
+    open->setObjectName("ghost");
+    routeBar->addWidget(open);
+    routeBar->addStretch();
+    outer->addLayout(routeBar);
+
+    auto *routeResult = new QLabel(u8("选择出行方式后可查询距离和预计时间。"));
+    routeResult->setObjectName("muted");
+    routeResult->setWordWrap(true);
+    outer->addWidget(routeResult);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    outer->addWidget(buttons);
+
+    const QJsonObject stationCopy = station;
+    const QPointer<QLabel> mapGuard(map);
+    if (mapNetwork_) {
+        auto *reply = mapNetwork_->get(mapRequest(tencentStaticMapUrl(stationCopy)));
+        connect(reply, &QNetworkReply::finished, this, [reply, mapGuard] {
+            const QByteArray body = reply->readAll();
+            if (mapGuard) {
+                QPixmap pix;
+                if (reply->error() == QNetworkReply::NoError && pix.loadFromData(body)) {
+                    mapGuard->setPixmap(pix.scaled(mapGuard->size(), Qt::KeepAspectRatio,
+                                                   Qt::SmoothTransformation));
+                    mapGuard->setText(QString());
+                } else {
+                    mapGuard->setText(u8("腾讯地图图片暂时无法加载，可点击“打开腾讯地图”查看位置。"));
+                }
+            }
+            reply->deleteLater();
+        });
+    }
+
+    connect(route, &QPushButton::clicked, this, [this, stationCopy, mode, routeResult, route] {
+        queryTencentRoute(stationCopy, mode->currentData().toString(), routeResult, route);
+    });
+    connect(open, &QPushButton::clicked, this, [this, stationCopy, mode] {
+        const QUrl url = tencentRouteUri(stationCopy, coord(), mode->currentData().toString());
+        if (!QDesktopServices::openUrl(url))
+            QProcess::startDetached(QStringLiteral("xdg-open"), {url.toString()});
+    });
+
+    dialog.exec();
+}
+
+void UserWindow::queryTencentRoute(const QJsonObject &station, const QString &mode,
+                                   QLabel *resultLabel, QPushButton *queryButton)
+{
+    if (!resultLabel || !mapNetwork_)
+        return;
+    const QJsonObject origin = coord();
+    const double fromLat = origin.value("lat").toDouble();
+    const double fromLng = origin.value("lng").toDouble();
+    const double toLat = station.value("lat").toDouble();
+    const double toLng = station.value("lng").toDouble();
+    if (!validCoordinate(fromLat, fromLng) || !validCoordinate(toLat, toLng)) {
+        resultLabel->setText(u8("当前位置或充电站坐标无效，无法规划路线。"));
+        return;
+    }
+    if (tencentMapKey().isEmpty()) {
+        resultLabel->setText(u8("未配置腾讯地图 Key；仍可点击“打开腾讯地图”进行导航。"));
+        return;
+    }
+    if (queryButton)
+        queryButton->setEnabled(false);
+    resultLabel->setText(u8("正在查询腾讯地图路线…"));
+
+    QList<QPair<QString, QString>> params{
+        {QStringLiteral("from"), coordinateText(fromLat, fromLng)},
+        {QStringLiteral("to"), coordinateText(toLat, toLng)},
+        {QStringLiteral("output"), QStringLiteral("json")},
+    };
+    if (mode == QStringLiteral("bus"))
+        params.append({QStringLiteral("policy"), QStringLiteral("LEAST_TIME")});
+    const QUrl url = tencentApiUrl(routeApiPath(mode), params);
+    auto *reply = mapNetwork_->get(mapRequest(url));
+    const QPointer<QLabel> resultGuard(resultLabel);
+    const QPointer<QPushButton> buttonGuard(queryButton);
+    connect(reply, &QNetworkReply::finished, this, [reply, resultGuard, buttonGuard, mode] {
+        if (resultGuard) {
+            const QByteArray raw = reply->readAll();
+            QJsonParseError error;
+            const QJsonDocument doc = QJsonDocument::fromJson(raw, &error);
+            if (reply->error() != QNetworkReply::NoError || error.error != QJsonParseError::NoError
+                || !doc.isObject()) {
+                resultGuard->setText(u8("路线查询失败：网络不可用或腾讯地图 API 未响应。"));
+            } else {
+                const QJsonObject root = doc.object();
+                const int status = root.value("status").toInt(-1);
+                const QString message = root.value("message").toString();
+                const QJsonObject result = root.value("result").toObject();
+                const QJsonArray routes = result.value("routes").toArray();
+                if (status != 0 || routes.isEmpty()) {
+                    resultGuard->setText(u8("%1路线查询失败：%2")
+                                             .arg(routeModeName(mode), message.isEmpty() ? u8("暂无路线") : message));
+                } else {
+                    const QJsonObject first = routes.first().toObject();
+                    const double distance = first.value("distance").toDouble();
+                    const int duration = first.value("duration").toInt();
+                    QString text = u8("%1：%2，距离约 %3 km")
+                                       .arg(routeModeName(mode), durationText(duration))
+                                       .arg(distance / 1000.0, 0, 'f', 1);
+                    if (first.contains("taxi_fare"))
+                        text += u8("，打车费约 ¥%1").arg(first.value("taxi_fare").toDouble(), 0, 'f', 2);
+                    resultGuard->setText(text);
+                }
+            }
+        }
+        if (buttonGuard)
+            buttonGuard->setEnabled(true);
+        reply->deleteLater();
+    });
 }
 
 void UserWindow::pollCharge()
