@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS recharge_log (
     created_at TEXT    NOT NULL
 );
 
+-- 运营操作留痕：重启、标故障、冻结、代结算等
 CREATE TABLE IF NOT EXISTS audit_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     actor      TEXT    NOT NULL,
@@ -92,6 +93,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
     created_at TEXT    NOT NULL
 );
 
+-- 预测脚本 / refreshForecast 写入，大屏只读
 CREATE TABLE IF NOT EXISTS load_forecast (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     station_id    INTEGER NOT NULL REFERENCES station(id),

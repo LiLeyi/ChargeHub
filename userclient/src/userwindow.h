@@ -36,16 +36,16 @@ public:
     explicit UserWindow(QWidget *parent = nullptr);
 
 private slots:
-    void doLogin();
-    void doRegister();
-    void queryStations();
-    void onResp(QJsonObject obj);
-    void pollCharge();
+    void doLogin();          ///< 校验手机号/密码后发 LOGIN
+    void doRegister();       ///< 注册，需两次密码一致
+    void queryStations();    ///< 按地址/半径找附近电站
+    void onResp(QJsonObject obj); ///< 处理所有 Socket 回包与 PUSH_CHARGE
+    void pollCharge();       ///< 充电中定时 CHARGE_STATUS（推送的补充）
 
 private:
-    QJsonObject coord() const;
+    QJsonObject coord() const;           ///< 当前定位（匹配地址后的经纬度）
     void applyUser(const QJsonObject &u);
-    void showShell();
+    void showShell();                    ///< 登录成功后进入主框架
     void switchTab(int i);
     void renderStations(const QJsonObject &data);
     void renderPiles(const QJsonObject &data);
@@ -54,12 +54,12 @@ private:
     void renderReservations(const QJsonArray &arr);
     void renderPileReview(const QJsonObject &data);
     void showCharge(const QJsonObject &order);
-    void tryStart(int pileId);
+    void tryStart(int pileId);           ///< 先查未完成订单再 START_CHARGE
     void doReserve(int pileId);
     void openPileReview(const QJsonObject &pile);
     void setReviewStars(int n);
     void submitReview();
-    void showStationLocation(const QJsonObject &station);
+    void showStationLocation(const QJsonObject &station); ///< 地图与导航弹窗
     void openNav(const QJsonObject &station);
     void queryTencentRoute(const QJsonObject &station, const QString &mode,
                            QLabel *resultLabel, QPushButton *queryButton);
@@ -67,9 +67,9 @@ private:
     void pickAvatar();
     void clearAvatar();
     void showAvatar(const QJsonObject &u);
-    void closeMyAccount();
+    void closeMyAccount();               ///< 二次确认后 CLOSE_ACCOUNT
     void reconnect();
-    void sendPendingAuth();
+    void sendPendingAuth();              ///< 连上后再发挂起的登录/注册
     QString serverHost() const;
     quint16 serverPort() const;
     QWidget *buildLogin();

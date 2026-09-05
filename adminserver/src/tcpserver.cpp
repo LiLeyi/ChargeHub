@@ -18,6 +18,7 @@ TcpServer::TcpServer(Dispatch *dispatch, QObject *parent)
     pushTimer_->start(5000);
 }
 
+/** 只给「充电中」用户推实时电量，seq=0，旧客户端可忽略。 */
 void TcpServer::pushChargeTicks()
 {
     for (auto it = socketUser_.constBegin(); it != socketUser_.constEnd(); ++it) {
@@ -60,6 +61,7 @@ void TcpServer::bindUser(QTcpSocket *socket, int userId)
     }
 }
 
+/** 该用户已无 TCP 时启动 60s 定时器，到点仍离线则停充待结算。 */
 void TcpServer::scheduleRelease(int userId)
 {
     if (userId <= 0 || userStillOnline(userId))

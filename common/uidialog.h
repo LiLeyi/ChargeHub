@@ -14,6 +14,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+/** 提示条颜色：信息 / 警告 / 错误 / 确认。 */
 enum class UiTone { Info, Warn, Error, Ask };
 
 inline QString uiBadgeText(UiTone tone)

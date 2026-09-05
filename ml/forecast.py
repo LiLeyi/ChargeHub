@@ -17,6 +17,7 @@ if not DB.exists():
 
 
 def loadHourly(conn) -> dict:
+    """按电站、星期、小时聚合已完成订单电量。"""
     rows = conn.execute(
         "SELECT o.start_time, o.energy_kwh, p.station_id "
         "FROM charge_order o JOIN pile p ON p.id=o.pile_id "
@@ -30,6 +31,7 @@ def loadHourly(conn) -> dict:
 
 
 def predict(conn) -> None:
+    """写入 load_forecast；只动分析表。"""
     hourly = loadHourly(conn)
     stations = conn.execute("SELECT id, name FROM station").fetchall()
     pile_cnt = {

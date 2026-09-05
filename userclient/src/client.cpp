@@ -36,6 +36,7 @@ bool Client::isConnected() const
     return sock_.state() == QAbstractSocket::ConnectedState;
 }
 
+/** 未连接只报错，不把半包写进套接字。 */
 int Client::request(const QString &type, const QJsonObject &data, const QString &token)
 {
     ++seq_;

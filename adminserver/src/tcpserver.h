@@ -27,9 +27,9 @@ protected:
     void incomingConnection(qintptr handle) override;
 
 private:
-    void bindUser(QTcpSocket *socket, int userId);
-    void scheduleRelease(int userId);
-    void pushChargeTicks();
+    void bindUser(QTcpSocket *socket, int userId);     ///< 登录成功后绑定连接与用户
+    void scheduleRelease(int userId);                  ///< 全部断开后 60s 再释放充电
+    void pushChargeTicks();                            ///< 每 5 秒推 PUSH_CHARGE
     bool userStillOnline(int userId, QTcpSocket *except = nullptr) const;
     Dispatch *dispatch_;
     QHash<QTcpSocket *, Protocol *> codecs_;

@@ -26,6 +26,7 @@ app = Flask(__name__, static_folder=str(STATIC), static_url_path="")
 
 
 def findDb() -> Path:
+    """按环境变量和管理端常见路径找只读库，找不到则返回默认路径。"""
     home = Path.home()
     env = Path(os.environ["CHARGEHUB_DB"]) if os.environ.get("CHARGEHUB_DB") else None
     candidates = [
@@ -47,6 +48,7 @@ DB = findDb()
 
 
 def q(sql: str, args=()):
+    """只读查询；表不存在时返回空列表，避免大屏崩溃。"""
     conn = sqlite3.connect(str(DB))
     conn.row_factory = sqlite3.Row
     try:
@@ -78,6 +80,7 @@ def summed(where, args=()):
 
 @app.get("/api/overview")
 def overview():
+    """今日/本月营收、桩状态、趋势和地图点。不写库。"""
     today = datetime.now().strftime("%Y-%m-%d")
     month = datetime.now().strftime("%Y-%m")
     piles = q("SELECT status, COUNT(*) AS n FROM pile GROUP BY status")
@@ -155,6 +158,7 @@ def overview():
 
 @app.get("/api/analysis")
 def analysis():
+    """预测、告警、调度建议，全部来自分析表。"""
     report = one("SELECT * FROM analysis_report ORDER BY id DESC LIMIT 1")
     hourly = q(
         "SELECT h.hour, h.pred_kwh, s.name FROM hourly_load h "
@@ -182,6 +186,7 @@ def analysis():
 
 @app.get("/api/tariffs")
 def tariffs():
+    """分时电价只读列表，供大屏展示。"""
     rows = q(
         "SELECT t.station_id, s.name, t.start_hour, t.end_hour, t.price_per_kwh, t.label "
         "FROM tariff_rule t JOIN station s ON s.id=t.station_id "

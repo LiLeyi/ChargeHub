@@ -27,12 +27,12 @@ class Database {
 public:
     explicit Database(const QString &path);
     ~Database();
-    bool open();
-    QVector<QVariantMap> query(const QString &sql, const QVariantList &args = {});
-    QVariantMap one(const QString &sql, const QVariantList &args = {});
+    bool open();                         ///< 打开库、建表、做列迁移
+    QVector<QVariantMap> query(const QString &sql, const QVariantList &args = {}); ///< 多行
+    QVariantMap one(const QString &sql, const QVariantList &args = {});            ///< 首行，没有则空
     /** 成功返回 lastInsertId（UPDATE 常为 0）；失败返回 -1。 */
     int execute(const QString &sql, const QVariantList &args = {});
-    bool transaction(const std::function<bool()> &fn);
+    bool transaction(const std::function<bool()> &fn); ///< 事务，fn 返回 false 则回滚
     QString lastError() const { return lastError_; }
     QString path() const { return path_; }
 

@@ -18,8 +18,9 @@ class Client : public QObject {
     Q_OBJECT
 public:
     explicit Client(QObject *parent = nullptr);
-    void connectTo(const QString &host, quint16 port);
+    void connectTo(const QString &host, quint16 port); ///< 连管理端，默认 8888
     bool isConnected() const;
+    /** 发送一帧业务请求，返回本次 seq。 */
     int request(const QString &type, const QJsonObject &data, const QString &token);
 signals:
     void connected();

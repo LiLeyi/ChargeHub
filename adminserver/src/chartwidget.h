@@ -11,7 +11,7 @@ class LineChart : public QWidget {
     Q_OBJECT
 public:
     explicit LineChart(QWidget *parent = nullptr);
-    void setPoints(const QJsonArray &pts, const QString &title = QString());
+    void setPoints(const QJsonArray &pts, const QString &title = QString()); ///< pts: [{x,y}] 或数值数组
 protected:
     void paintEvent(QPaintEvent *e) override;
 private:

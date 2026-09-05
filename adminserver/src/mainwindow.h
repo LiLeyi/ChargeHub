@@ -27,18 +27,18 @@ class MainWindow : public QMainWindow {
 public:
     MainWindow(Dispatch *dispatch, QWidget *parent = nullptr);
 private slots:
-    void refresh();
-    void rebootPile();
-    void markFault();
-    void freeze(bool on);
-    void addStation();
-    void editStation();
-    void enableTariff();
-    void adoptPlan();
-    void forceStop();
-    void forceSettle();
-    void genForecast();
-    void openDash();
+    void refresh();          ///< 刷新表格、KPI、图表
+    void rebootPile();       ///< 远程重启选中桩
+    void markFault();        ///< 标记选中桩故障
+    void freeze(bool on);    ///< 冻结 / 解冻选中用户
+    void addStation();       ///< 弹窗新建电站
+    void editStation();      ///< 弹窗修改选中电站
+    void enableTariff();     ///< 为选中站启用默认分时电价
+    void adoptPlan();        ///< 采纳调度建议表中选中行
+    void forceStop();        ///< 强制结束选中订单充电
+    void forceSettle();      ///< 代结算选中订单
+    void genForecast();      ///< 重算智能分析
+    void openDash();         ///< 启动只读 Web 大屏
 private:
     Dispatch *dispatch_;
     QListWidget *nav_ = nullptr;

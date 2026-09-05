@@ -11,6 +11,7 @@ HOST, PORT = "127.0.0.1", 8888
 
 
 def packMessage(obj: dict) -> bytes:
+    """与用户端相同：4 字节大端长度 + JSON。"""
     body = json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     return struct.pack(">I", len(body)) + body
 

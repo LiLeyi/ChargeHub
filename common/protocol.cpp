@@ -7,6 +7,7 @@
 #include <QJsonDocument>
 #include <QtEndian>
 
+/** 大端 4 字节长度 + UTF-8 JSON。 */
 QByteArray Protocol::pack(const QJsonObject &obj)
 {
     const QByteArray body = QJsonDocument(obj).toJson(QJsonDocument::Compact);
@@ -30,6 +31,7 @@ QJsonObject Protocol::nextPacket()
     return ready_.takeFirst();
 }
 
+/** 长度非法或超过 1MB 则丢弃缓冲，防止坏帧拖死拆包。 */
 void Protocol::tryDecode()
 {
     while (buf_.size() >= 4) {
