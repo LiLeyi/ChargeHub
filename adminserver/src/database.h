@@ -13,6 +13,8 @@
  * 表结构以 database/schema.sql 为准，C++ 启动时 CREATE IF NOT EXISTS 并做列迁移。
  */
 
+#include <functional>
+
 #include <QMutex>
 #include <QSqlDatabase>
 #include <QSqlQuery>
@@ -28,12 +30,16 @@ public:
     bool open();
     QVector<QVariantMap> query(const QString &sql, const QVariantList &args = {});
     QVariantMap one(const QString &sql, const QVariantList &args = {});
+    /** 成功返回 lastInsertId（UPDATE 常为 0）；失败返回 -1。 */
     int execute(const QString &sql, const QVariantList &args = {});
+    bool transaction(const std::function<bool()> &fn);
+    QString lastError() const { return lastError_; }
     QString path() const { return path_; }
 
 private:
     QSqlDatabase conn();
     QString path_;
+    QString lastError_;
     QRecursiveMutex mutex_;
 };
 

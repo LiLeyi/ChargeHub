@@ -22,7 +22,8 @@ HEADERS += \
     src/chartwidget.h \
     src/mainwindow.h \
     ../common/protocol.h \
-    ../common/appstyle.h
+    ../common/appstyle.h \
+    ../common/uidialog.h
 
 unix {
     QMAKE_CXXFLAGS += -finput-charset=UTF-8

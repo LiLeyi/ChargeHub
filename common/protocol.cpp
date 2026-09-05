@@ -35,7 +35,7 @@ void Protocol::tryDecode()
     while (buf_.size() >= 4) {
         const quint32 len = qFromBigEndian<quint32>(
             reinterpret_cast<const uchar *>(buf_.constData()));
-        if (len == 0 || len > 8 * 1024 * 1024) {
+        if (len == 0 || len > 1024 * 1024) {
             buf_.clear();
             return;
         }

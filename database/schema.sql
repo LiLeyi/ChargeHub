@@ -56,7 +56,10 @@ CREATE TABLE IF NOT EXISTS pile (
     power_kw             REAL    NOT NULL CHECK (power_kw > 0),
     status               TEXT    NOT NULL DEFAULT '闲置' CHECK (status IN ('闲置', '在用', '故障')),
     total_charge_count   INTEGER NOT NULL DEFAULT 0,
-    total_charge_minutes INTEGER NOT NULL DEFAULT 0
+    total_charge_minutes INTEGER NOT NULL DEFAULT 0,
+    last_seen_at         TEXT    NOT NULL DEFAULT '',
+    fault_code           TEXT    NOT NULL DEFAULT '',
+    fault_at             TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS charge_order (
@@ -105,7 +108,8 @@ CREATE TABLE IF NOT EXISTS reservation (
     pile_id    INTEGER NOT NULL REFERENCES pile(id),
     status     TEXT    NOT NULL DEFAULT '有效' CHECK (status IN ('有效', '已取消', '已履约')),
     expire_at  TEXT    NOT NULL,
-    created_at TEXT    NOT NULL
+    created_at TEXT    NOT NULL,
+    no_show    INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS station_review (
@@ -159,7 +163,27 @@ CREATE TABLE IF NOT EXISTS dispatch_plan (
     recommend  REAL    NOT NULL,
     priority   INTEGER NOT NULL,
     reason     TEXT    NOT NULL,
-    created_at TEXT    NOT NULL
+    created_at TEXT    NOT NULL,
+    adopted    INTEGER NOT NULL DEFAULT 0,
+    adopted_at TEXT    NOT NULL DEFAULT ''
+);
+
+-- 分时电价：start_hour 含、end_hour 不含。无规则时用 station.price_per_kwh
+-- 只由管理端写入；用户端/大屏只读
+CREATE TABLE IF NOT EXISTS tariff_rule (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    station_id    INTEGER NOT NULL REFERENCES station(id),
+    start_hour    INTEGER NOT NULL,
+    end_hour      INTEGER NOT NULL,
+    price_per_kwh REAL    NOT NULL CHECK (price_per_kwh > 0),
+    label         TEXT    NOT NULL DEFAULT ''
+);
+
+-- 登录 token 落库，管理端重启后 30 分钟内仍可用。只管理端写
+CREATE TABLE IF NOT EXISTS session (
+    token      TEXT    PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES user(id),
+    updated_at TEXT    NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS analysis_report (
@@ -175,3 +199,9 @@ CREATE TABLE IF NOT EXISTS analysis_report (
 CREATE INDEX IF NOT EXISTS idx_order_user_status ON charge_order(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_order_start ON charge_order(start_time);
 CREATE INDEX IF NOT EXISTS idx_pile_station ON pile(station_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_order_user_open ON charge_order(user_id)
+    WHERE status IN ('充电中', '待结算');
+CREATE UNIQUE INDEX IF NOT EXISTS idx_order_pile_charging ON charge_order(pile_id)
+    WHERE status='充电中';
+CREATE INDEX IF NOT EXISTS idx_reservation_pile_status ON reservation(pile_id, status);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);

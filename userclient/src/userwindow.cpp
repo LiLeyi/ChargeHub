@@ -3,6 +3,7 @@
  * @brief 用户端页面与交互，所有写操作只发 Socket 请求
  */
 #include "userwindow.h"
+#include "uidialog.h"
 
 #if __has_include("tencentmap_credentials.h")
 #include "tencentmap_credentials.h"
@@ -14,8 +15,6 @@
 #include <QVector>
 #include <QBuffer>
 #include <QDesktopServices>
-#include <QDialog>
-#include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -26,7 +25,6 @@
 #include <QListView>
 #include <QListWidget>
 #include <QComboBox>
-#include <QMessageBox>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -899,7 +897,7 @@ QWidget *UserWindow::buildMe()
     connect(save, &QPushButton::clicked, this, [this] {
         const QString nick = nickEdit_->text().trimmed();
         if (nick.size() < 1 || nick.size() > 20) {
-            QMessageBox::warning(this, u8("格式错误"), u8("昵称长度须为 1~20 个字符"));
+            uiWarn(this, u8("格式错误"), u8("昵称长度须为 1~20 个字符"));
             return;
         }
         client_.request("UPDATE_PROFILE", QJsonObject{{"nickname", nick}}, token_);
@@ -925,7 +923,7 @@ QWidget *UserWindow::buildMe()
     connect(pay, &QPushButton::clicked, this, [this] {
         const double a = payEdit_->text().toDouble();
         if (a <= 0 || a > 10000) {
-            QMessageBox::warning(this, u8("金额错误"), u8("单笔充值须大于 0 且不超过 10000 元"));
+            uiWarn(this, u8("金额错误"), u8("单笔充值须大于 0 且不超过 10000 元"));
             return;
         }
         client_.request("RECHARGE", QJsonObject{{"amount", a}}, token_);
@@ -1039,11 +1037,11 @@ void UserWindow::doLogin()
     const QString phone = phone_->text().trimmed();
     const QString pwd = pwd_->text();
     if (!QRegularExpression(QStringLiteral("^1[3-9][0-9]{9}$")).match(phone).hasMatch()) {
-        QMessageBox::warning(this, u8("格式错误"), u8("请输入正确的手机号格式"));
+        uiWarn(this, u8("格式错误"), u8("请输入正确的手机号格式"));
         return;
     }
     if (pwd.size() < 6 || pwd.size() > 20) {
-        QMessageBox::warning(this, u8("格式错误"), u8("密码长度须为 6~20 位"));
+        uiWarn(this, u8("格式错误"), u8("密码长度须为 6~20 位"));
         return;
     }
     pendingAuth_ = QStringLiteral("LOGIN");
@@ -1062,15 +1060,15 @@ void UserWindow::doRegister()
     const QString phone = phone_->text().trimmed();
     const QString pwd = pwd_->text();
     if (!QRegularExpression(QStringLiteral("^1[3-9][0-9]{9}$")).match(phone).hasMatch()) {
-        QMessageBox::warning(this, u8("格式错误"), u8("请输入正确的手机号格式"));
+        uiWarn(this, u8("格式错误"), u8("请输入正确的手机号格式"));
         return;
     }
     if (pwd.size() < 6 || pwd.size() > 20) {
-        QMessageBox::warning(this, u8("格式错误"), u8("密码长度须为 6~20 位"));
+        uiWarn(this, u8("格式错误"), u8("密码长度须为 6~20 位"));
         return;
     }
     if (pwd != pwd2_->text()) {
-        QMessageBox::warning(this, u8("格式错误"), u8("两次输入的密码不一致"));
+        uiWarn(this, u8("格式错误"), u8("两次输入的密码不一致"));
         return;
     }
     pendingAuth_ = QStringLiteral("REGISTER");
@@ -1147,7 +1145,7 @@ void UserWindow::pickAvatar()
         return;
     QImage img(path);
     if (img.isNull()) {
-        QMessageBox::warning(this, u8("无法打开"), u8("请选择有效的 jpg / png 图片"));
+        uiWarn(this, u8("无法打开"), u8("请选择有效的 jpg / png 图片"));
         return;
     }
     if (img.width() > 512 || img.height() > 512)
@@ -1156,11 +1154,11 @@ void UserWindow::pickAvatar()
     QBuffer buf(&bytes);
     buf.open(QIODevice::WriteOnly);
     if (!img.save(&buf, "JPEG", 88)) {
-        QMessageBox::warning(this, u8("无法处理"), u8("图片编码失败，请换一张"));
+        uiWarn(this, u8("无法处理"), u8("图片编码失败，请换一张"));
         return;
     }
     if (bytes.size() > 400 * 1024) {
-        QMessageBox::warning(this, u8("图片过大"), u8("请选择更小的图片（压缩后需小于 400KB）"));
+        uiWarn(this, u8("图片过大"), u8("请选择更小的图片（压缩后需小于 400KB）"));
         return;
     }
     client_.request("UPDATE_PROFILE",
@@ -1190,14 +1188,10 @@ void UserWindow::refreshMe()
 
 void UserWindow::closeMyAccount()
 {
-    const auto ret = QMessageBox::question(
-        this,
-        u8("注销账号"),
-        u8("注销后账号将被禁用并留档，订单、评价、充值记录均保留以便追溯。\n"
-           "同一手机号不能再注册。确定注销吗？"),
-        QMessageBox::Yes | QMessageBox::No,
-        QMessageBox::No);
-    if (ret != QMessageBox::Yes)
+    if (!uiAsk(this, u8("注销账号"),
+               u8("注销后账号将被禁用并留档，订单、评价、充值记录均保留以便追溯。\n"
+                  "同一手机号不能再注册。确定注销吗？"),
+               u8("确认注销"), u8("再想想"), true))
         return;
     client_.request("CLOSE_ACCOUNT", {}, token_);
 }
@@ -1778,12 +1772,12 @@ void UserWindow::submitReview()
 {
     const int pileId = currentPile_.value("id").toInt();
     if (pileId <= 0) {
-        QMessageBox::warning(this, u8("无法评价"), u8("请从电桩列表进入对应桩的评价页"));
+        uiWarn(this, u8("无法评价"), u8("请从电桩列表进入对应桩的评价页"));
         return;
     }
     const QString comment = reviewBody_ ? reviewBody_->toPlainText().trimmed() : QString();
     if (comment.size() < 2 || comment.size() > 300) {
-        QMessageBox::warning(this, u8("评语不完整"), u8("请写下 2~300 字的充电体验，不能只打分"));
+        uiWarn(this, u8("评语不完整"), u8("请写下 2~300 字的充电体验，不能只打分"));
         return;
     }
     client_.request("REVIEW_STATION",
@@ -1804,65 +1798,50 @@ void UserWindow::showStationLocation(const QJsonObject &station)
     const double lat = station.value("lat").toDouble();
     const double lng = station.value("lng").toDouble();
     if (!validCoordinate(lat, lng)) {
-        QMessageBox::warning(this, u8("位置不可用"), u8("该充电站暂时没有有效的经纬度信息。"));
+        uiWarn(this, u8("位置不可用"), u8("该充电站暂时没有有效的经纬度信息。"));
         return;
     }
 
-    QDialog dialog(this);
+    UiSheet dialog(this, station.value("name").toString(),
+                   QString::fromUtf8("%1\n坐标 %2, %3")
+                       .arg(station.value("address").toString())
+                       .arg(lat, 0, 'f', 6)
+                       .arg(lng, 0, 'f', 6));
     dialog.setWindowTitle(u8("充电站位置与导航"));
-    dialog.resize(720, 620);
-    auto *outer = new QVBoxLayout(&dialog);
-    outer->setContentsMargins(18, 18, 18, 16);
-    outer->setSpacing(10);
-
-    auto *title = new QLabel(station.value("name").toString());
-    title->setObjectName("title");
-    outer->addWidget(title);
-
-    auto *info = new QLabel(
-        QString::fromUtf8("%1\n坐标：%2, %3")
-            .arg(station.value("address").toString())
-            .arg(lat, 0, 'f', 6)
-            .arg(lng, 0, 'f', 6));
-    info->setObjectName("muted");
-    info->setWordWrap(true);
-    outer->addWidget(info);
+    dialog.polish(920, 760);
 
     auto *map = new QLabel(u8("正在加载腾讯地图…"));
     map->setAlignment(Qt::AlignCenter);
-    map->setMinimumSize(640, 360);
-    map->setStyleSheet(QStringLiteral("background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;"));
+    map->setMinimumSize(820, 400);
+    map->setStyleSheet(QStringLiteral(
+        "background:#F8FAFC;border:1px solid #E2E8F0;border-radius:12px;color:#64748B;font-size:14px;"));
     map->setScaledContents(false);
-    outer->addWidget(map, 1);
+    dialog.body()->addWidget(map, 1);
 
     auto *routeBar = new QHBoxLayout;
-    routeBar->setSpacing(8);
-    routeBar->addWidget(new QLabel(u8("出行方式")));
+    routeBar->setSpacing(10);
+    routeBar->addWidget(uiFieldLabel(u8("出行方式")));
     auto *mode = new QComboBox;
     mode->addItem(u8("驾车"), QStringLiteral("drive"));
     mode->addItem(u8("步行"), QStringLiteral("walk"));
     mode->addItem(u8("骑行"), QStringLiteral("bike"));
     mode->addItem(u8("公交"), QStringLiteral("bus"));
-    mode->setMinimumWidth(110);
+    mode->setMinimumWidth(140);
     prepCombo(mode);
     routeBar->addWidget(mode);
     auto *route = new QPushButton(u8("查询路线"));
-    route->setObjectName("primary");
     routeBar->addWidget(route);
     auto *open = new QPushButton(u8("打开腾讯地图"));
     open->setObjectName("ghost");
     routeBar->addWidget(open);
     routeBar->addStretch();
-    outer->addLayout(routeBar);
+    dialog.body()->addLayout(routeBar);
 
     auto *routeResult = new QLabel(u8("选择出行方式后可查询距离和预计时间。"));
-    routeResult->setObjectName("muted");
+    routeResult->setObjectName("uiSheetHint");
     routeResult->setWordWrap(true);
-    outer->addWidget(routeResult);
-
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    outer->addWidget(buttons);
+    dialog.body()->addWidget(routeResult);
+    dialog.addClose();
 
     const QJsonObject stationCopy = station;
     const QPointer<QLabel> mapGuard(map);
@@ -1978,7 +1957,7 @@ void UserWindow::onResp(QJsonObject obj)
     if (code != 0) {
         const QString msg = obj.value("message").toString();
         loginHint_->setText(msg.isEmpty() ? u8("请求失败") : msg);
-        QMessageBox::warning(this, u8("提示"), msg.isEmpty() ? (type + u8(" 失败")) : msg);
+        uiWarn(this, u8("提示"), msg.isEmpty() ? (type + u8(" 失败")) : msg);
         // 只有登录/注册失败才停在登录页；进首页后的接口失败不得把人踢回去
         if (type == "LOGIN" || type == "REGISTER") {
             token_.clear();
@@ -2000,8 +1979,8 @@ void UserWindow::onResp(QJsonObject obj)
         locLng_ = 116.3473;
         if (addrEdit_)
             addrEdit_->clear();
-        QMessageBox::information(this, u8("账号已注销"),
-                                 obj.value("message").toString(u8("账号已禁用留档，历史记录可追溯。")));
+        uiInfo(this, u8("账号已注销"),
+               obj.value("message").toString(u8("账号已禁用留档，历史记录可追溯。")));
         loginHint_->setText(u8("账号已注销留档，同一手机号不能再注册"));
         root_->setCurrentIndex(0);
     } else if (type == "QUERY_STATIONS") {
@@ -2009,7 +1988,7 @@ void UserWindow::onResp(QJsonObject obj)
     } else if (type == "QUERY_PILES") {
         renderPiles(data);
     } else if (type == "RESERVE_PILE" || type == "CANCEL_RESERVE") {
-        QMessageBox::information(this, u8("ChargeHub"), obj.value("message").toString());
+        uiInfo(this, u8("ChargeHub"), obj.value("message").toString());
         if (pages_->currentIndex() == 6)
             client_.request("LIST_RESERVATIONS", {}, token_);
         else if (currentStation_.value("id").toInt() > 0)
@@ -2017,7 +1996,7 @@ void UserWindow::onResp(QJsonObject obj)
         else
             queryStations();
     } else if (type == "REVIEW_STATION") {
-        QMessageBox::information(this, u8("ChargeHub"), obj.value("message").toString());
+        uiInfo(this, u8("ChargeHub"), obj.value("message").toString());
         const int pileId = currentPile_.value("id").toInt();
         if (pages_->currentIndex() == 5 && pileId > 0)
             client_.request("LIST_PILE_REVIEWS", QJsonObject{{"pileId", pileId}}, token_);
@@ -2027,12 +2006,16 @@ void UserWindow::onResp(QJsonObject obj)
             queryStations();
     } else if (type == "LIST_PILE_REVIEWS") {
         renderPileReview(data);
+    } else if (type == "PUSH_CHARGE") {
+        const QJsonObject order = data.value("order").toObject();
+        if (!order.isEmpty() && order.value("id").toInt() > 0)
+            showCharge(order);
     } else if (type == "CHARGE_STATUS") {
         const QJsonObject order = data.value("order").toObject();
         if (wantStart_) {
             wantStart_ = false;
             if (!order.isEmpty() && order.value("id").toInt() > 0) {
-                QMessageBox::warning(this, u8("无法开始充电"), u8("您有未完成的充电订单，请先结算"));
+                uiWarn(this, u8("无法开始充电"), u8("您有未完成的充电订单，请先结算"));
                 showCharge(order);
                 if (order.value("status").toString() == u8("充电中"))
                     poll_.start(1000);
@@ -2065,12 +2048,12 @@ void UserWindow::onResp(QJsonObject obj)
         poll_.stop();
         applyUser(data.value("user").toObject());
         const auto o = data.value("order").toObject();
-        QMessageBox::information(this, u8("结算成功"),
-                                 u8("订单 %1\n电量 %2 kWh\n费用 ¥%3\n余额 ¥%4")
-                                     .arg(o.value("orderNo").toString())
-                                     .arg(o.value("energyKwh").toDouble(), 0, 'f', 3)
-                                     .arg(o.value("amount").toDouble(), 0, 'f', 2)
-                                     .arg(user_.value("balance").toDouble(), 0, 'f', 2));
+        uiInfo(this, u8("结算成功"),
+               u8("订单 %1\n电量 %2 kWh\n费用 ¥%3\n余额 ¥%4")
+                   .arg(o.value("orderNo").toString())
+                   .arg(o.value("energyKwh").toDouble(), 0, 'f', 3)
+                   .arg(o.value("amount").toDouble(), 0, 'f', 2)
+                   .arg(user_.value("balance").toDouble(), 0, 'f', 2));
         currentOrder_ = {};
         switchTab(3);
     } else if (type == "LIST_ORDERS") {
@@ -2080,12 +2063,12 @@ void UserWindow::onResp(QJsonObject obj)
     } else if (type == "RECHARGE" || type == "UPDATE_PROFILE") {
         applyUser(data.value("user").toObject());
         if (type == "RECHARGE")
-            QMessageBox::information(this, u8("充值成功"),
-                                     u8("流水号 %1\n金额 ¥%2")
-                                         .arg(data.value("tradeNo").toString())
-                                         .arg(data.value("amount").toDouble(), 0, 'f', 2));
+            uiInfo(this, u8("充值成功"),
+                   u8("流水号 %1\n金额 ¥%2")
+                       .arg(data.value("tradeNo").toString())
+                       .arg(data.value("amount").toDouble(), 0, 'f', 2));
         else
-            QMessageBox::information(this, u8("ChargeHub"), obj.value("message").toString());
+            uiInfo(this, u8("ChargeHub"), obj.value("message").toString());
     } else if (type == "LIST_RECHARGE") {
         renderRecharge(data.value("records").toArray());
     }
