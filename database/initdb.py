@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent
 
 
 def schemaFile() -> Path:
+    """权威表结构：database/schema.sql。"""
     return ROOT / "schema.sql"
 
 

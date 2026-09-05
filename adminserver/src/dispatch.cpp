@@ -1,6 +1,9 @@
 /**
  * @file dispatch.cpp
- * @brief 全部业务规则：用户端协议与管理端同进程调用都走这里
+ * @brief Dispatch 实现。头文件写清职责与调用关系；这里是具体校验和 SQL。
+ *
+ * 读代码顺序建议：handle → startCharge / stopCharge / settle → calcLive。
+ * 金额 fenOf/moneyFen 保证接口仍是元。详见 docs/模块与协作说明.md
  */
 #include "dispatch.h"
 
@@ -22,11 +25,13 @@
 #include <QUuid>
 #include <QtMath>
 
+/** 中国大陆手机号：1 开头，第二位 3–9。 */
 static QRegularExpression phoneRe()
 {
     return QRegularExpression(QStringLiteral("^1[3-9][0-9]{9}$"));
 }
 
+/** 按星级和关键词做简易情感分析，只写评价表，不改订单。 */
 static QJsonObject analyzeReview(int score, const QString &text)
 {
     const QStringList pos = {QString::fromUtf8("快"), QString::fromUtf8("稳"), QString::fromUtf8("方便"),
@@ -68,6 +73,7 @@ static QString dumpDoc(const QJsonObject &o)
     return QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
 }
 
+/** 头像压到 256px JPEG，便于 BLOB 入库。 */
 static QByteArray jpegAvatar(const QByteArray &raw, QString *err)
 {
     QImage img;
@@ -356,6 +362,7 @@ QJsonObject Dispatch::publicUser(const QVariantMap &u) const
     return o;
 }
 
+/** 按 type 分发；写操作 8 秒内相同 token+type+seq 直接回上次结果。 */
 QJsonObject Dispatch::handle(const QJsonObject &req)
 {
     const QString type = req.value("type").toString();
@@ -558,6 +565,7 @@ QJsonObject Dispatch::updateProfile(const QVariantMap &user, const QJsonObject &
     return QJsonObject{{"user", publicUser(u)}};
 }
 
+/** 模拟充值，单笔 ≤ 10000 元，内部按分入账。 */
 QJsonObject Dispatch::recharge(const QVariantMap &user, const QJsonObject &data)
 {
     bool ok = false;
@@ -803,6 +811,7 @@ QVariantMap Dispatch::openOrder(int userId) const
         {userId});
 }
 
+/** 按小时切段：电量=功率×时长，费用用分累计后再换成元。 */
 QJsonObject Dispatch::calcLive(const QVariantMap &order, const QVariantMap &pile, const QVariantMap &station) const
 {
     const QDateTime start = QDateTime::fromString(order.value("start_time").toString(), "yyyy-MM-dd HH:mm:ss");
@@ -880,6 +889,7 @@ QJsonObject Dispatch::publicOrder(const QVariantMap &o, const QVariantMap &p, co
     return r;
 }
 
+/** 一用户一笔未完成订单、一桩同时只能充一单；成功后桩改「在用」。 */
 QJsonObject Dispatch::startCharge(const QVariantMap &user, const QJsonObject &data)
 {
     expireReservations();
@@ -944,6 +954,7 @@ QJsonObject Dispatch::chargeStatus(const QVariantMap &user) const
     return QJsonObject{{"order", publicOrder(order, pile, station, calcLive(order, pile, station))}};
 }
 
+/** 充电中 → 待结算，写下电量费用，桩改闲置。 */
 QJsonObject Dispatch::stopCharge(const QVariantMap &user)
 {
     auto order = db_->one(
@@ -975,6 +986,7 @@ QJsonObject Dispatch::stopCharge(const QVariantMap &user)
     return QJsonObject{{"order", publicOrder(order, pile, station, calcLive(order, pile, station))}};
 }
 
+/** 待结算订单扣余额（按分），桩改闲置。 */
 QJsonObject Dispatch::settle(const QVariantMap &userIn)
 {
     auto order = db_->one(
@@ -1175,6 +1187,7 @@ int Dispatch::addStation(const QVariantMap &data)
     return sid;
 }
 
+/** 谷 0–7/22–24、平 7–17、峰 17–22，系数乘站点标价。 */
 QString Dispatch::applyDefaultTariff(int stationId)
 {
     auto st = db_->one("SELECT * FROM station WHERE id=?", {stationId});

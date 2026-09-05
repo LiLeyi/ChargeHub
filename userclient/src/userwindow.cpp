@@ -1,6 +1,9 @@
 /**
  * @file userwindow.cpp
- * @brief 用户端页面与交互，所有写操作只发 Socket 请求
+ * @brief 用户端页面。按钮 → Client::request；回包 → onResp。不打开数据库。
+ *
+ * 页：登录 / 找站 / 桩列表 / 充电 / 订单 / 评价 / 预约 / 我的。
+ * 充电刷新：PUSH_CHARGE 与 pollCharge 并存，旧字段不删。
  */
 #include "userwindow.h"
 #include "uidialog.h"
@@ -255,6 +258,7 @@ UserWindow::UserWindow(QWidget *parent) : QMainWindow(parent)
     reconnect();
 }
 
+/** 清空动态卡片列表，避免刷新时叠一层。 */
 void UserWindow::clearBox(QLayout *lay)
 {
     while (lay->count()) {
@@ -265,6 +269,7 @@ void UserWindow::clearBox(QLayout *lay)
     }
 }
 
+/** 登录页：服务器地址、手机号、密码；不打开数据库。 */
 QWidget *UserWindow::buildLogin()
 {
     auto *w = new QWidget;
@@ -1638,6 +1643,7 @@ void UserWindow::showCharge(const QJsonObject &order)
     }
 }
 
+/** 先 CHARGE_STATUS，有未完成单则提示结算，否则再开充。 */
 void UserWindow::tryStart(int pileId)
 {
     pendingPile_ = pileId;
@@ -1950,6 +1956,7 @@ void UserWindow::pollCharge()
         client_.request("CHARGE_STATUS", {}, token_);
 }
 
+/** 失败弹提示；PUSH_CHARGE / CHARGE_STATUS 刷新充电页，不改登录态。 */
 void UserWindow::onResp(QJsonObject obj)
 {
     const QString type = obj.value("type").toString();

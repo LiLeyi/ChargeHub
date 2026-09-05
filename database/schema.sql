@@ -1,4 +1,6 @@
--- ChargeHub SQLite 表结构（权威说明，与 C++ 启动建表一致）
+-- ChargeHub SQLite 表结构（权威说明，与 C++ Database::open 建表一致）
+-- 谁写：仅 adminserver/Dispatch。用户端不打开本库。大屏只读。预测只写分析表。
+-- 答辩时按「谁写谁读」讲即可，详见 docs/模块与协作说明.md
 -- 写权限：仅 PC 管理端 adminserver。用户端禁止打开本文件。
 -- 大屏 Flask 只读；ml/forecast.py 只写分析相关表。
 -- 库文件位置：管理端可执行文件旁 data/chargehub.db
@@ -83,6 +85,7 @@ CREATE TABLE IF NOT EXISTS recharge_log (
     created_at TEXT    NOT NULL
 );
 
+-- 运营操作留痕：重启、标故障、冻结、代结算等
 CREATE TABLE IF NOT EXISTS audit_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     actor      TEXT    NOT NULL,
@@ -92,6 +95,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
     created_at TEXT    NOT NULL
 );
 
+-- 预测脚本 / refreshForecast 写入，大屏只读
 CREATE TABLE IF NOT EXISTS load_forecast (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     station_id    INTEGER NOT NULL REFERENCES station(id),

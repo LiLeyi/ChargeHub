@@ -1,6 +1,8 @@
 /**
  * @file tcpserver.cpp
- * @brief 接受用户端连接，解码后交给 Dispatch；断线超时释放桩
+ * @brief 接入层实现：拆包→Dispatch::handle→回包；断线 60s 释放；5s 推送。
+ *
+ * incomingConnection 是核心循环。业务判断全部在 Dispatch，这里只搬运字节。
  */
 #include "tcpserver.h"
 
@@ -18,6 +20,7 @@ TcpServer::TcpServer(Dispatch *dispatch, QObject *parent)
     pushTimer_->start(5000);
 }
 
+/** 只给「充电中」用户推实时电量，seq=0，旧客户端可忽略。 */
 void TcpServer::pushChargeTicks()
 {
     for (auto it = socketUser_.constBegin(); it != socketUser_.constEnd(); ++it) {
@@ -60,6 +63,7 @@ void TcpServer::bindUser(QTcpSocket *socket, int userId)
     }
 }
 
+/** 该用户已无 TCP 时启动 60s 定时器，到点仍离线则停充待结算。 */
 void TcpServer::scheduleRelease(int userId)
 {
     if (userId <= 0 || userStillOnline(userId))
@@ -78,6 +82,7 @@ void TcpServer::scheduleRelease(int userId)
     timer->start(kReleaseMs);
 }
 
+/** 新连接：挂 Protocol，读到完整包就 handle 并写回，同时 bindUser。 */
 void TcpServer::incomingConnection(qintptr handle)
 {
     auto *socket = new QTcpSocket(this);

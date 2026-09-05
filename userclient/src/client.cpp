@@ -1,6 +1,6 @@
 /**
  * @file client.cpp
- * @brief 连接管理端并收发长度前缀报文
+ * @brief 用户端套接字。构造时接好 connected/readyRead/error，界面只调 connectTo/request。
  */
 #include "client.h"
 
@@ -36,6 +36,7 @@ bool Client::isConnected() const
     return sock_.state() == QAbstractSocket::ConnectedState;
 }
 
+/** 未连接只报错，不把半包写进套接字。 */
 int Client::request(const QString &type, const QJsonObject &data, const QString &token)
 {
     ++seq_;

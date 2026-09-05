@@ -3,14 +3,14 @@
 
 /**
  * @file database.h
- * @brief SQLite 封装：全进程唯一写库入口。
+ * @brief SQLite 封装：管理端进程里唯一的写库入口。
  *
- * 库文件默认：可执行文件旁 data/chargehub.db。
- * 仅 adminserver 允许打开。userclient / dashboard / ml 不得当第二写者：
- *   - 用户端：只发 TCP；
- *   - 大屏：只读同一份文件；
- *   - 预测脚本：只写分析表，且须在管理端已启动、能接受 WAL 读者时运行。
- * 表结构以 database/schema.sql 为准，C++ 启动时 CREATE IF NOT EXISTS 并做列迁移。
+ * 【职责】打开 chargehub.db，提供 query / one / execute / transaction。
+ * 【原理】每条 SQL 带互斥锁；transaction(fn) 在 BEGIN 里跑 fn，false 则 ROLLBACK。
+ *         开充、停充、结算、充值必须走事务，避免「扣了钱订单没落」。
+ * 【协作】只被 Dispatch 当写者。用户端禁止 open。大屏/预测用 Python 另开只读或只写分析表。
+ *         表结构以 database/schema.sql 为准，open() 里 CREATE IF NOT EXISTS + 列迁移。
+ * 【详见】docs/模块与协作说明.md
  */
 
 #include <functional>
@@ -27,12 +27,12 @@ class Database {
 public:
     explicit Database(const QString &path);
     ~Database();
-    bool open();
-    QVector<QVariantMap> query(const QString &sql, const QVariantList &args = {});
-    QVariantMap one(const QString &sql, const QVariantList &args = {});
+    bool open();                         ///< 打开库、建表、做列迁移
+    QVector<QVariantMap> query(const QString &sql, const QVariantList &args = {}); ///< 多行
+    QVariantMap one(const QString &sql, const QVariantList &args = {});            ///< 首行，没有则空
     /** 成功返回 lastInsertId（UPDATE 常为 0）；失败返回 -1。 */
     int execute(const QString &sql, const QVariantList &args = {});
-    bool transaction(const std::function<bool()> &fn);
+    bool transaction(const std::function<bool()> &fn); ///< 事务，fn 返回 false 则回滚
     QString lastError() const { return lastError_; }
     QString path() const { return path_; }
 

@@ -3,10 +3,13 @@
 
 /**
  * @file mainwindow.h
- * @brief 运营管理端主窗口：电站、电桩、用户、订单、智能分析。
+ * @brief 运营桌面：电站 / 电桩 / 用户 / 订单 / 智能分析 / 审计。
  *
- * 与 TcpServer 同进程，直接调 Dispatch，不向 8888 再连一次。
- * 打开 Web 大屏只是启动 Flask 并打开浏览器，大屏自己只读 SQLite。
+ * 【职责】展示 Dispatch 查出来的表，把按钮转成 Dispatch 调用。
+ * 【原理】与 TcpServer 同进程，不连 8888。refresh() 定时拉 KPI 和表格。
+ *         弹窗用 UiSheet，只改外观，不改接口字段。
+ * 【协作】openDash() 只启动 Flask；大屏自己只读库，不经本窗口写单。
+ * 【详见】docs/模块与协作说明.md
  */
 #include "chartwidget.h"
 #include "dispatch.h"
@@ -27,18 +30,18 @@ class MainWindow : public QMainWindow {
 public:
     MainWindow(Dispatch *dispatch, QWidget *parent = nullptr);
 private slots:
-    void refresh();
-    void rebootPile();
-    void markFault();
-    void freeze(bool on);
-    void addStation();
-    void editStation();
-    void enableTariff();
-    void adoptPlan();
-    void forceStop();
-    void forceSettle();
-    void genForecast();
-    void openDash();
+    void refresh();          ///< 刷新表格、KPI、图表
+    void rebootPile();       ///< 远程重启选中桩
+    void markFault();        ///< 标记选中桩故障
+    void freeze(bool on);    ///< 冻结 / 解冻选中用户
+    void addStation();       ///< 弹窗新建电站
+    void editStation();      ///< 弹窗修改选中电站
+    void enableTariff();     ///< 为选中站启用默认分时电价
+    void adoptPlan();        ///< 采纳调度建议表中选中行
+    void forceStop();        ///< 强制结束选中订单充电
+    void forceSettle();      ///< 代结算选中订单
+    void genForecast();      ///< 重算智能分析
+    void openDash();         ///< 启动只读 Web 大屏
 private:
     Dispatch *dispatch_;
     QListWidget *nav_ = nullptr;

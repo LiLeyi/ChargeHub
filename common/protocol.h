@@ -3,13 +3,14 @@
 
 /**
  * @file protocol.h
- * @brief 用户端 ↔ 管理端 的唯一通信格式（管理端 GUI 不走这里）。
+ * @brief 用户端与管理端的唯一报文格式（运营 GUI 不走这里）。
  *
- * 传输：TCP。默认端口 8888。
- * 帧：先 4 字节大端无符号长度，再等长的 UTF-8 JSON（单帧不超过 1MB）。
- * JSON 请求：{ type, seq, role:"user", token, data }
- * JSON 响应：{ type, seq, code, message, data }  code==0 成功。
- * 用户端禁止直连 SQLite；所有业务由管理端 Dispatch 写库后回包。
+ * 【职责】组包 / 拆包。不解释 type，不查 token。
+ * 【原理】帧 = 4 字节大端长度 + UTF-8 JSON。append() 把粘在一起的字节按长度切开。
+ *         长度非法或超过 1MB 清空缓冲，避免永远拼不齐。
+ * 【协作】Client::request 调用 pack；TcpServer 每连接一个实例调用 append/nextPacket。
+ * 【报文】请求 {type,seq,role:"user",token,data}；响应多 code/message，0 成功。
+ * 【详见】docs/模块与协作说明.md 与 protocol/messages.md
  */
 
 #include <QByteArray>
