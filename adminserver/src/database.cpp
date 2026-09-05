@@ -6,6 +6,7 @@
 
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QDebug>
 #include <QDir>
 #include <QFileInfo>
 #include <QHash>
@@ -16,6 +17,103 @@
 #include <QSqlRecord>
 #include <QThread>
 #include <QtGlobal>
+
+namespace {
+
+QString sqlOperation(const QString &sql)
+{
+    const QString trimmed = sql.trimmed();
+    int separator = 0;
+    while (separator < trimmed.size() && !trimmed.at(separator).isSpace())
+        ++separator;
+    const QString operation = trimmed.left(separator).toUpper();
+    if (operation == QLatin1String("SELECT") || operation == QLatin1String("INSERT")
+        || operation == QLatin1String("UPDATE") || operation == QLatin1String("DELETE")
+        || operation == QLatin1String("PRAGMA") || operation == QLatin1String("CREATE")
+        || operation == QLatin1String("ALTER") || operation == QLatin1String("DROP")
+        || operation == QLatin1String("REPLACE")
+        || operation == QLatin1String("WITH")) {
+        return operation;
+    }
+    return QStringLiteral("UNKNOWN");
+}
+
+void logSqlError(const QString &context, const QSqlError &error, const QString &sql)
+{
+    // Do not log SQL text or bound values: callers may pass passwords or tokens.
+    qCritical().noquote() << context << "failed:" << error.text()
+                          << "(SQL operation:" << sqlOperation(sql) + QLatin1Char(')');
+}
+
+bool execSql(QSqlQuery &query, const QString &sql, const QString &context)
+{
+    if (query.exec(sql))
+        return true;
+    logSqlError(context, query.lastError(), sql);
+    return false;
+}
+
+bool execSql(QSqlDatabase &database, const QString &sql, const QString &context)
+{
+    QSqlQuery query(database);
+    return execSql(query, sql, context);
+}
+
+bool prepareSql(QSqlQuery &query, const QString &sql, const QString &context)
+{
+    if (query.prepare(sql))
+        return true;
+    logSqlError(context, query.lastError(), sql);
+    return false;
+}
+
+bool execPrepared(QSqlQuery &query, const QString &sql, const QString &context)
+{
+    if (query.exec())
+        return true;
+    logSqlError(context, query.lastError(), sql);
+    return false;
+}
+
+bool tableHasColumn(QSqlDatabase &database, const QString &table, const QString &column,
+                    bool *found)
+{
+    const QString sql = QStringLiteral("PRAGMA table_info(%1)").arg(table);
+    QSqlQuery query(database);
+    if (!execSql(query, sql, QStringLiteral("Inspect table %1").arg(table)))
+        return false;
+
+    *found = false;
+    while (query.next()) {
+        if (query.value(1).toString() == column) {
+            *found = true;
+            break;
+        }
+    }
+    if (query.lastError().isValid()) {
+        logSqlError(QStringLiteral("Read table metadata for %1").arg(table), query.lastError(), sql);
+        return false;
+    }
+    return true;
+}
+
+bool queryCount(QSqlDatabase &database, const QString &sql, const QString &context, int *count)
+{
+    QSqlQuery query(database);
+    if (!execSql(query, sql, context))
+        return false;
+    if (!query.next()) {
+        if (query.lastError().isValid())
+            logSqlError(context, query.lastError(), sql);
+        else
+            qCritical().noquote() << context << "failed: count query returned no row";
+        return false;
+    }
+    *count = query.value(0).toInt();
+    return true;
+}
+
+} // namespace
 
 static const char *kSchema = R"SQL(
 PRAGMA foreign_keys = ON;
@@ -32,7 +130,7 @@ CREATE TABLE IF NOT EXISTS user (
     avatar_path TEXT NOT NULL DEFAULT '',
     password_hash TEXT NOT NULL DEFAULT '',
     balance REAL NOT NULL DEFAULT 0.00,
-    status TEXT NOT NULL DEFAULT '正常',
+    status TEXT NOT NULL DEFAULT '正常' CHECK (status IN ('正常', '冻结', '注销')),
     created_at TEXT NOT NULL,
     address TEXT NOT NULL DEFAULT '',
     loc_lat REAL NOT NULL DEFAULT 39.9644,
@@ -41,7 +139,7 @@ CREATE TABLE IF NOT EXISTS user (
     closed_at TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS user_avatar (
-    user_id INTEGER PRIMARY KEY,
+    user_id INTEGER PRIMARY KEY REFERENCES user(id),
     mime TEXT NOT NULL,
     data BLOB NOT NULL,
     updated_at TEXT NOT NULL
@@ -52,24 +150,24 @@ CREATE TABLE IF NOT EXISTS station (
     address TEXT NOT NULL,
     lng REAL NOT NULL,
     lat REAL NOT NULL,
-    price_per_kwh REAL NOT NULL
+    price_per_kwh REAL NOT NULL CHECK (price_per_kwh > 0)
 );
 CREATE TABLE IF NOT EXISTS pile (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     pile_no TEXT NOT NULL UNIQUE,
-    station_id INTEGER NOT NULL,
-    type TEXT NOT NULL,
-    power_kw REAL NOT NULL,
-    status TEXT NOT NULL DEFAULT '闲置',
+    station_id INTEGER NOT NULL REFERENCES station(id),
+    type TEXT NOT NULL CHECK (type IN ('快充', '慢充')),
+    power_kw REAL NOT NULL CHECK (power_kw > 0),
+    status TEXT NOT NULL DEFAULT '闲置' CHECK (status IN ('闲置', '在用', '故障')),
     total_charge_count INTEGER NOT NULL DEFAULT 0,
     total_charge_minutes INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS charge_order (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     order_no TEXT NOT NULL UNIQUE,
-    user_id INTEGER NOT NULL,
-    pile_id INTEGER NOT NULL,
-    status TEXT NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES user(id),
+    pile_id INTEGER NOT NULL REFERENCES pile(id),
+    status TEXT NOT NULL CHECK (status IN ('充电中', '待结算', '已完成', '已取消')),
     start_time TEXT NOT NULL,
     end_time TEXT,
     energy_kwh REAL NOT NULL DEFAULT 0,
@@ -78,7 +176,7 @@ CREATE TABLE IF NOT EXISTS charge_order (
 );
 CREATE TABLE IF NOT EXISTS recharge_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES user(id),
     amount REAL NOT NULL,
     result TEXT NOT NULL,
     created_at TEXT NOT NULL
@@ -93,7 +191,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE TABLE IF NOT EXISTS load_forecast (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    station_id INTEGER NOT NULL,
+    station_id INTEGER NOT NULL REFERENCES station(id),
     horizon_hours INTEGER NOT NULL,
     pred_kwh REAL NOT NULL,
     pred_idle INTEGER NOT NULL,
@@ -102,18 +200,18 @@ CREATE TABLE IF NOT EXISTS load_forecast (
 );
 CREATE TABLE IF NOT EXISTS reservation (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    pile_id INTEGER NOT NULL,
-    status TEXT NOT NULL DEFAULT '有效',
+    user_id INTEGER NOT NULL REFERENCES user(id),
+    pile_id INTEGER NOT NULL REFERENCES pile(id),
+    status TEXT NOT NULL DEFAULT '有效' CHECK (status IN ('有效', '已取消', '已履约')),
     expire_at TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS station_review (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    station_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES user(id),
+    station_id INTEGER NOT NULL REFERENCES station(id),
     pile_id INTEGER NOT NULL DEFAULT 0,
-    score INTEGER NOT NULL,
+    score INTEGER NOT NULL CHECK (score BETWEEN 1 AND 5),
     comment TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
@@ -165,6 +263,22 @@ CREATE TABLE IF NOT EXISTS analysis_report (
     weather TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+DROP INDEX IF EXISTS idx_order_created_at;
+DROP INDEX IF EXISTS idx_recharge_user_created;
+CREATE INDEX IF NOT EXISTS idx_order_user_status ON charge_order(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_order_user_id ON charge_order(user_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_order_status ON charge_order(status);
+CREATE INDEX IF NOT EXISTS idx_order_start ON charge_order(start_time);
+CREATE INDEX IF NOT EXISTS idx_pile_station ON pile(station_id);
+CREATE INDEX IF NOT EXISTS idx_pile_status ON pile(status);
+CREATE INDEX IF NOT EXISTS idx_reservation_user_status ON reservation(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_reservation_pile_status ON reservation(pile_id, status);
+CREATE INDEX IF NOT EXISTS idx_reservation_status_expire ON reservation(status, expire_at);
+CREATE INDEX IF NOT EXISTS idx_station_review_station ON station_review(station_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_station_review_user_pile ON station_review(user_id, pile_id);
+CREATE INDEX IF NOT EXISTS idx_station_review_pile_id ON station_review(pile_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_review_doc_pile_id ON review_doc(pile_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_recharge_user_id ON recharge_log(user_id, id DESC);
 )SQL";
 
 Database::Database(const QString &path) : path_(path) {}
@@ -181,81 +295,119 @@ Database::~Database()
 QSqlDatabase Database::conn()
 {
     const QString name = QString("db_%1").arg(quintptr(QThread::currentThreadId()));
+    QSqlDatabase db;
     if (!QSqlDatabase::contains(name)) {
-        QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
+        db = QSqlDatabase::addDatabase("QSQLITE", name);
         db.setDatabaseName(path_);
-        db.open();
+    } else {
+        db = QSqlDatabase::database(name, false);
     }
-    return QSqlDatabase::database(name);
+    if (!db.isValid()) {
+        qCritical().noquote() << "Create SQLite connection failed: QSQLITE driver is unavailable";
+        return db;
+    }
+    if (!db.isOpen() && !db.open())
+        qCritical().noquote() << "Open SQLite database failed:" << db.lastError().text()
+                              << "database path:" << path_;
+    return db;
 }
 
 bool Database::open()
 {
     QMutexLocker locker(&mutex_);
-    QDir().mkpath(QFileInfo(path_).absolutePath());
-    QSqlDatabase db = conn();
-    if (!db.isOpen())
+    const QString databaseDir = QFileInfo(path_).absolutePath();
+    if (!QDir().mkpath(databaseDir)) {
+        qCritical().noquote() << "Create database directory failed:" << databaseDir;
         return false;
-    db.exec("PRAGMA foreign_keys = ON");
-    db.exec("PRAGMA busy_timeout = 5000");
-    db.exec("PRAGMA journal_mode = WAL");
+    }
+    QSqlDatabase db = conn();
+    if (!db.isValid() || !db.isOpen())
+        return false;
+    if (!execSql(db, QStringLiteral("PRAGMA foreign_keys = ON"), QStringLiteral("Enable foreign keys"))
+        || !execSql(db, QStringLiteral("PRAGMA busy_timeout = 5000"), QStringLiteral("Set busy timeout"))
+        || !execSql(db, QStringLiteral("PRAGMA journal_mode = WAL"), QStringLiteral("Enable WAL mode"))) {
+        return false;
+    }
     const QStringList stmts = QString::fromUtf8(kSchema).split(QLatin1Char(';'));
-    for (const QString &s : stmts) {
+    for (int i = 0; i < stmts.size(); ++i) {
+        const QString &s = stmts.at(i);
         const QString t = s.trimmed();
-        if (!t.isEmpty())
-            db.exec(t);
+        if (!t.isEmpty()
+            && !execSql(db, t, QStringLiteral("Initialize schema statement %1").arg(i + 1))) {
+            return false;
+        }
     }
     QSqlQuery q(db);
-    q.exec("PRAGMA table_info(user)");
     bool hasPwd = false;
-    while (q.next()) {
-        if (q.value(1).toString() == QLatin1String("password_hash"))
-            hasPwd = true;
+    if (!tableHasColumn(db, QStringLiteral("user"), QStringLiteral("password_hash"), &hasPwd))
+        return false;
+    if (!hasPwd
+        && !execSql(db, QStringLiteral("ALTER TABLE user ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''"),
+                    QStringLiteral("Add user.password_hash column"))) {
+        return false;
     }
-    if (!hasPwd)
-        db.exec("ALTER TABLE user ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''");
     auto addUserCol = [&](const char *name, const char *def) {
-        q.exec("PRAGMA table_info(user)");
         bool has = false;
-        while (q.next()) {
-            if (q.value(1).toString() == QLatin1String(name))
-                has = true;
-        }
-        if (!has)
-            db.exec(QString("ALTER TABLE user ADD COLUMN %1 %2").arg(QLatin1String(name), QLatin1String(def)));
+        if (!tableHasColumn(db, QStringLiteral("user"), QLatin1String(name), &has))
+            return false;
+        if (has)
+            return true;
+        const QString sql = QStringLiteral("ALTER TABLE user ADD COLUMN %1 %2")
+                                .arg(QLatin1String(name), QLatin1String(def));
+        return execSql(db, sql, QStringLiteral("Add user.%1 column").arg(QLatin1String(name)));
     };
-    addUserCol("address", "TEXT NOT NULL DEFAULT ''");
-    addUserCol("loc_lat", "REAL NOT NULL DEFAULT 39.9644");
-    addUserCol("loc_lng", "REAL NOT NULL DEFAULT 116.3473");
-    addUserCol("close_reason", "TEXT NOT NULL DEFAULT ''");
-    addUserCol("closed_at", "TEXT NOT NULL DEFAULT ''");
-    q.exec("PRAGMA table_info(station_review)");
-    bool hasPile = false;
-    while (q.next()) {
-        if (q.value(1).toString() == QLatin1String("pile_id"))
-            hasPile = true;
+    if (!addUserCol("address", "TEXT NOT NULL DEFAULT ''")
+        || !addUserCol("loc_lat", "REAL NOT NULL DEFAULT 39.9644")
+        || !addUserCol("loc_lng", "REAL NOT NULL DEFAULT 116.3473")
+        || !addUserCol("close_reason", "TEXT NOT NULL DEFAULT ''")
+        || !addUserCol("closed_at", "TEXT NOT NULL DEFAULT ''")) {
+        return false;
     }
-    if (!hasPile)
-        db.exec("ALTER TABLE station_review ADD COLUMN pile_id INTEGER NOT NULL DEFAULT 0");
-    db.exec("UPDATE station_review SET pile_id=("
-            "SELECT p.id FROM pile p WHERE p.station_id=station_review.station_id ORDER BY p.id LIMIT 1"
-            ") WHERE IFNULL(pile_id,0)=0");
+    bool hasPile = false;
+    if (!tableHasColumn(db, QStringLiteral("station_review"), QStringLiteral("pile_id"), &hasPile))
+        return false;
+    if (!hasPile
+        && !execSql(db, QStringLiteral("ALTER TABLE station_review ADD COLUMN pile_id INTEGER NOT NULL DEFAULT 0"),
+                    QStringLiteral("Add station_review.pile_id column"))) {
+        return false;
+    }
+    const QString reviewPileBackfill = QStringLiteral(
+        "UPDATE station_review SET pile_id=("
+        "SELECT p.id FROM pile p WHERE p.station_id=station_review.station_id ORDER BY p.id LIMIT 1"
+        ") WHERE IFNULL(pile_id,0)=0");
+    if (!execSql(db, reviewPileBackfill, QStringLiteral("Backfill station review pile IDs")))
+        return false;
     const QByteArray defHash = QCryptographicHash::hash(QByteArray("123456"), QCryptographicHash::Sha256).toHex();
-    q.prepare("UPDATE user SET password_hash=? WHERE password_hash='' OR password_hash IS NULL");
+    const QString updatePasswords = QStringLiteral(
+        "UPDATE user SET password_hash=? WHERE password_hash='' OR password_hash IS NULL");
+    if (!prepareSql(q, updatePasswords, QStringLiteral("Prepare default password hash update")))
+        return false;
     q.addBindValue(QString::fromLatin1(defHash));
-    q.exec();
+    if (!execPrepared(q, updatePasswords, QStringLiteral("Update default password hashes")))
+        return false;
 
-    q.exec("SELECT COUNT(*) FROM admin");
-    q.next();
-    if (q.value(0).toInt() == 0) {
+    int adminCount = 0;
+    if (!queryCount(db, QStringLiteral("SELECT COUNT(*) FROM admin"),
+                    QStringLiteral("Count administrator records"), &adminCount)) {
+        return false;
+    }
+    if (adminCount == 0) {
         const QString now = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
         const QByteArray hash = QCryptographicHash::hash(QByteArray("123456"), QCryptographicHash::Sha256).toHex();
-        q.prepare("INSERT INTO admin(username,password_hash,created_at) VALUES(?,?,?)");
+        const QString insertAdmin = QStringLiteral(
+            "INSERT INTO admin(username,password_hash,created_at) VALUES(?,?,?)");
+        if (!prepareSql(q, insertAdmin, QStringLiteral("Prepare administrator seed")))
+            return false;
         q.addBindValue("admin");
         q.addBindValue(QString::fromLatin1(hash));
         q.addBindValue(now);
-        q.exec();
-        q.prepare("INSERT INTO user(phone,nickname,avatar_path,password_hash,balance,status,created_at) VALUES(?,?,?,?,?,?,?)");
+        if (!execPrepared(q, insertAdmin, QStringLiteral("Insert administrator seed")))
+            return false;
+        const QString insertUser = QStringLiteral(
+            "INSERT INTO user(phone,nickname,avatar_path,password_hash,balance,status,created_at) "
+            "VALUES(?,?,?,?,?,?,?)");
+        if (!prepareSql(q, insertUser, QStringLiteral("Prepare user seed")))
+            return false;
         q.addBindValue("13800138000");
         q.addBindValue(QString::fromUtf8("用户8000"));
         q.addBindValue("");
@@ -263,14 +415,16 @@ bool Database::open()
         q.addBindValue(80.0);
         q.addBindValue(QString::fromUtf8("正常"));
         q.addBindValue(now);
-        q.exec();
+        if (!execPrepared(q, insertUser, QStringLiteral("Insert user seed")))
+            return false;
         struct ExtraU { const char *p, *n; double b; const char *st; } extras[] = {
             {"13912345678", "用户5678", 36.5, "正常"},
             {"18611112222", "用户2222", 12.0, "正常"},
             {"17700009999", "用户9999", 5.0, "冻结"},
         };
         for (const auto &eu : extras) {
-            q.prepare("INSERT INTO user(phone,nickname,avatar_path,password_hash,balance,status,created_at) VALUES(?,?,?,?,?,?,?)");
+            if (!prepareSql(q, insertUser, QStringLiteral("Prepare additional user seed")))
+                return false;
             q.addBindValue(QString::fromLatin1(eu.p));
             q.addBindValue(QString::fromUtf8(eu.n));
             q.addBindValue("");
@@ -278,39 +432,51 @@ bool Database::open()
             q.addBindValue(eu.b);
             q.addBindValue(QString::fromUtf8(eu.st));
             q.addBindValue(now);
-            q.exec();
+            if (!execPrepared(q, insertUser, QStringLiteral("Insert additional user seed")))
+                return false;
         }
         struct St { const char *n, *a; double lng, lat, p; } sts[] = {
             {"北京理工大学充电站", "北京市海淀区中关村南大街5号", 116.3473, 39.9644, 1.28},
             {"中关村软件园充电站", "北京市海淀区东北旺西路8号", 116.3105, 39.9832, 1.35},
             {"五道口地铁充电站", "北京市海淀区成府路五道口", 116.3382, 39.9928, 1.20},
         };
+        const QString insertStation = QStringLiteral(
+            "INSERT INTO station(name,address,lng,lat,price_per_kwh) VALUES(?,?,?,?,?)");
+        const QString insertPile = QStringLiteral(
+            "INSERT INTO pile(pile_no,station_id,type,power_kw,status) VALUES(?,?,?,?,?)");
         for (int i = 0; i < 3; ++i) {
-            q.prepare("INSERT INTO station(name,address,lng,lat,price_per_kwh) VALUES(?,?,?,?,?)");
+            if (!prepareSql(q, insertStation, QStringLiteral("Prepare station seed")))
+                return false;
             q.addBindValue(QString::fromUtf8(sts[i].n));
             q.addBindValue(QString::fromUtf8(sts[i].a));
             q.addBindValue(sts[i].lng);
             q.addBindValue(sts[i].lat);
             q.addBindValue(sts[i].p);
-            q.exec();
+            if (!execPrepared(q, insertStation, QStringLiteral("Insert station seed")))
+                return false;
             const int sid = q.lastInsertId().toInt();
             for (int j = 1; j <= 4; ++j) {
                 const bool fast = j <= 2;
                 const QString status = (i == 2 && j == 4) ? QString::fromUtf8("故障") : QString::fromUtf8("闲置");
-                q.prepare("INSERT INTO pile(pile_no,station_id,type,power_kw,status) VALUES(?,?,?,?,?)");
+                if (!prepareSql(q, insertPile, QStringLiteral("Prepare pile seed")))
+                    return false;
                 q.addBindValue(QString("ST%1-P%2").arg(sid, 2, 10, QChar('0')).arg(j, 2, 10, QChar('0')));
                 q.addBindValue(sid);
                 q.addBindValue(fast ? QString::fromUtf8("快充") : QString::fromUtf8("慢充"));
                 q.addBindValue(fast ? 60.0 : 7.0);
                 q.addBindValue(status);
-                q.exec();
+                if (!execPrepared(q, insertPile, QStringLiteral("Insert pile seed")))
+                    return false;
             }
         }
     }
 
-    q.exec("SELECT COUNT(*) FROM station_review");
-    q.next();
-    if (q.value(0).toInt() == 0) {
+    int reviewCount = 0;
+    if (!queryCount(db, QStringLiteral("SELECT COUNT(*) FROM station_review"),
+                    QStringLiteral("Count station reviews"), &reviewCount)) {
+        return false;
+    }
+    if (reviewCount == 0) {
         const QString now = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
         struct Rv { int uid, sid, pid, score; const char *c; } rvs[] = {
             {1, 1, 1, 5, "P01 快充功率稳，下课过来很快就满"},
@@ -323,21 +489,29 @@ bool Database::open()
             {2, 3, 10, 5, "快充稳定，从五道口过来很合适"},
             {3, 3, 11, 4, "慢充过夜没掉线，适合住附近的人"},
         };
+        const QString insertReview = QStringLiteral(
+            "INSERT INTO station_review(user_id,station_id,pile_id,score,comment,created_at) "
+            "VALUES(?,?,?,?,?,?)");
         for (const auto &r : rvs) {
-            q.prepare("INSERT INTO station_review(user_id,station_id,pile_id,score,comment,created_at) VALUES(?,?,?,?,?,?)");
+            if (!prepareSql(q, insertReview, QStringLiteral("Prepare station review seed")))
+                return false;
             q.addBindValue(r.uid);
             q.addBindValue(r.sid);
             q.addBindValue(r.pid);
             q.addBindValue(r.score);
             q.addBindValue(QString::fromUtf8(r.c));
             q.addBindValue(now);
-            q.exec();
+            if (!execPrepared(q, insertReview, QStringLiteral("Insert station review seed")))
+                return false;
         }
     }
 
-    q.exec("SELECT COUNT(*) FROM review_doc");
-    q.next();
-    if (q.value(0).toInt() == 0) {
+    int reviewDocCount = 0;
+    if (!queryCount(db, QStringLiteral("SELECT COUNT(*) FROM review_doc"),
+                    QStringLiteral("Count review documents"), &reviewDocCount)) {
+        return false;
+    }
+    if (reviewDocCount == 0) {
         const auto rows = query("SELECT user_id, station_id, pile_id, score, comment, created_at FROM station_review");
         for (const auto &r : rows) {
             QJsonObject doc{
@@ -357,9 +531,12 @@ bool Database::open()
         }
     }
 
-    q.exec("SELECT COUNT(*) FROM audit_log WHERE action='SEED_HISTORY'");
-    q.next();
-    if (q.value(0).toInt() == 0) {
+    int historySeedCount = 0;
+    if (!queryCount(db, QStringLiteral("SELECT COUNT(*) FROM audit_log WHERE action='SEED_HISTORY'"),
+                    QStringLiteral("Count history seed markers"), &historySeedCount)) {
+        return false;
+    }
+    if (historySeedCount == 0) {
         const QString now = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
         const auto piles = query("SELECT id, station_id, power_kw FROM pile WHERE status!='故障'");
         const auto prices = query("SELECT id, price_per_kwh FROM station");
@@ -394,9 +571,12 @@ bool Database::open()
         }
     }
 
-    q.exec("SELECT COUNT(*) FROM load_forecast");
-    q.next();
-    if (q.value(0).toInt() == 0) {
+    int forecastCount = 0;
+    if (!queryCount(db, QStringLiteral("SELECT COUNT(*) FROM load_forecast"),
+                    QStringLiteral("Count load forecasts"), &forecastCount)) {
+        return false;
+    }
+    if (forecastCount == 0) {
         const QString now = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
         const auto stations = query("SELECT id FROM station");
         for (const auto &s : stations) {
@@ -419,17 +599,26 @@ bool Database::open()
 QVector<QVariantMap> Database::query(const QString &sql, const QVariantList &args)
 {
     QMutexLocker locker(&mutex_);
-    QSqlQuery q(conn());
-    q.prepare(sql);
+    QSqlDatabase db = conn();
+    if (!db.isValid() || !db.isOpen())
+        return {};
+    QSqlQuery q(db);
+    if (!prepareSql(q, sql, QStringLiteral("Prepare database query")))
+        return {};
     for (const QVariant &a : args)
         q.addBindValue(a);
-    q.exec();
+    if (!execPrepared(q, sql, QStringLiteral("Execute database query")))
+        return {};
     QVector<QVariantMap> rows;
     while (q.next()) {
         QVariantMap row;
         for (int i = 0; i < q.record().count(); ++i)
             row.insert(q.record().fieldName(i), q.value(i));
         rows.append(row);
+    }
+    if (q.lastError().isValid()) {
+        logSqlError(QStringLiteral("Read database query results"), q.lastError(), sql);
+        return {};
     }
     return rows;
 }
@@ -443,10 +632,15 @@ QVariantMap Database::one(const QString &sql, const QVariantList &args)
 int Database::execute(const QString &sql, const QVariantList &args)
 {
     QMutexLocker locker(&mutex_);
-    QSqlQuery q(conn());
-    q.prepare(sql);
+    QSqlDatabase db = conn();
+    if (!db.isValid() || !db.isOpen())
+        return 0;
+    QSqlQuery q(db);
+    if (!prepareSql(q, sql, QStringLiteral("Prepare database command")))
+        return 0;
     for (const QVariant &a : args)
         q.addBindValue(a);
-    q.exec();
+    if (!execPrepared(q, sql, QStringLiteral("Execute database command")))
+        return 0;
     return q.lastInsertId().toInt();
 }

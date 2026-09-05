@@ -172,6 +172,19 @@ CREATE TABLE IF NOT EXISTS analysis_report (
     created_at    TEXT    NOT NULL
 );
 
+DROP INDEX IF EXISTS idx_order_created_at;
+DROP INDEX IF EXISTS idx_recharge_user_created;
 CREATE INDEX IF NOT EXISTS idx_order_user_status ON charge_order(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_order_user_id ON charge_order(user_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_order_status ON charge_order(status);
 CREATE INDEX IF NOT EXISTS idx_order_start ON charge_order(start_time);
 CREATE INDEX IF NOT EXISTS idx_pile_station ON pile(station_id);
+CREATE INDEX IF NOT EXISTS idx_pile_status ON pile(status);
+CREATE INDEX IF NOT EXISTS idx_reservation_user_status ON reservation(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_reservation_pile_status ON reservation(pile_id, status);
+CREATE INDEX IF NOT EXISTS idx_reservation_status_expire ON reservation(status, expire_at);
+CREATE INDEX IF NOT EXISTS idx_station_review_station ON station_review(station_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_station_review_user_pile ON station_review(user_id, pile_id);
+CREATE INDEX IF NOT EXISTS idx_station_review_pile_id ON station_review(pile_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_review_doc_pile_id ON review_doc(pile_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_recharge_user_id ON recharge_log(user_id, id DESC);
