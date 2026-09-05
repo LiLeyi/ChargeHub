@@ -3,11 +3,14 @@
 
 /**
  * @file tcpserver.h
- * @brief 管理端里的用户接入层：监听 0.0.0.0:8888。
+ * @brief 用户接入层：0.0.0.0:8888，只做拆包/回包/推送/断线计时。
  *
- * 每来一个用户端 TCP 连接，就配一个 Protocol 拆包，再 Dispatch::handle，
- * 把响应写回同一条连接。不做业务判断。可同时接多个用户端。
- * 同一用户全部连接断开后 60 秒仍未重连，则把「充电中」订单收成待结算并释放桩。
+ * 【职责】把 TCP 字节变成 JSON 交给 Dispatch，再把 JSON 写回；不管怎么计费。
+ * 【原理】一连接一个 Protocol；readyRead 循环 nextPacket→handle→pack。
+ *         登录成功 bindUser；该用户最后一个连接断开后 60s 调 releaseStaleSession。
+ *         另有 5s 定时器 pushChargeTicks，只推「充电中」的 PUSH_CHARGE（seq=0）。
+ * 【协作】持有 Dispatch*。不写 SQL。管理端 MainWindow 不经过本类。
+ * 【详见】docs/模块与协作说明.md
  */
 
 #include "dispatch.h"

@@ -3,7 +3,11 @@
 
 /**
  * @file uidialog.h
- * @brief 统一弹窗：提示、确认、表单。只改界面，不改业务接口。
+ * @brief 统一弹窗（提示 / 确认 / 表单）。只改 UI，不改 Socket 字段。
+ *
+ * 【职责】替代又小又丑的 QMessageBox；电站表单、导航、注销确认都用它。
+ * 【原理】UiSheet 分头/身/底；uiInfo/uiWarn/uiAsk 走同一套 objectName，两端 QSS 分别画深色/浅色。
+ * 【协作】被 MainWindow、UserWindow、管理端登录框调用。
  */
 #include <QDialog>
 #include <QFrame>

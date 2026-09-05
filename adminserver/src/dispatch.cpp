@@ -1,6 +1,9 @@
 /**
  * @file dispatch.cpp
- * @brief 全部业务规则：用户端协议与管理端同进程调用都走这里
+ * @brief Dispatch 实现。头文件写清职责与调用关系；这里是具体校验和 SQL。
+ *
+ * 读代码顺序建议：handle → startCharge / stopCharge / settle → calcLive。
+ * 金额 fenOf/moneyFen 保证接口仍是元。详见 docs/模块与协作说明.md
  */
 #include "dispatch.h"
 

@@ -1,6 +1,6 @@
 /**
  * @file protocol.cpp
- * @brief 组包 / 拆包，粘包时按长度切帧
+ * @brief 长度前缀帧的编解码。pack 给发送端；append/tryDecode 给接收端。
  */
 #include "protocol.h"
 

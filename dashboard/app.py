@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
-"""ChargeHub 运营大屏：只读 SQLite + ECharts，不改订单/余额。
+"""ChargeHub 运营大屏：只读 SQLite + ECharts。
 
-HTTP（默认 0.0.0.0:5000，组员浏览器可填服务器 IP）：
-  GET /              index.html
-  GET /api/overview  今日/本月营收、桩状态、地图点
-  GET /api/analysis  负荷预测与告警（读分析表）
-  GET /api/tariffs   分时电价（只读）
-
-库路径优先环境变量 CHARGEHUB_DB，否则找管理端 data/chargehub.db。
+职责：给浏览器提供 JSON，不改订单、余额、桩状态。
+原理：Flask 读管理端同一份 WAL 库；表缺了就返回空列表。
+协作：管理端 MainWindow.openDash 启动本进程；Dispatch 写库，本模块只读。
+接口：GET / 、/api/overview 、/api/analysis 、/api/tariffs
+详见 docs/模块与协作说明.md
 """
 from __future__ import annotations
 

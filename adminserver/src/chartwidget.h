@@ -3,7 +3,9 @@
 
 /**
  * @file chartwidget.h
- * @brief 管理端自绘折线 / 柱状 / 饼图，不依赖 Qt Charts。
+ * @brief 管理端自绘折线 / 柱 / 饼，不依赖 Qt Charts，方便虚拟机编译。
+ *
+ * 数据来自 MainWindow::refresh → Dispatch 的营收点和桩状态。只负责画。
  */
 #include <QJsonArray>
 #include <QWidget>

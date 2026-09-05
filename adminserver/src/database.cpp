@@ -1,6 +1,9 @@
 /**
  * @file database.cpp
- * @brief 建表、旧库迁移、演示电站与账号
+ * @brief 建表、旧库加列、演示数据。open() 可重复执行，已有联调库只迁移不覆盖。
+ *
+ * 演示账号：管理员 admin/123456；用户 13800138000/123456。
+ * 调用者只有 Dispatch 和 main.cpp 的 Database::open。
  */
 #include "database.h"
 

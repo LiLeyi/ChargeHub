@@ -1,9 +1,11 @@
 /**
  * @file main.cpp
- * @brief 管理端入口：打开 SQLite、监听 TCP 8888、启动运营窗口。
+ * @brief 管理端进程入口：锁实例 → 开库 → Dispatch → 听 8888 → 登录框 → MainWindow。
  *
- * 本进程 = 全组唯一的「服务器」：写库 + 听 8888。同一台机器用文件锁禁止开第二份；
- * 不同电脑各开一份则会变成两套互不相通的系统，联调时只允许一台开管理端。
+ * 【职责】保证全组只有一份服务器（写库 + TCP）。
+ * 【原理】文件锁 chargehub.lock；TcpServer 在登录框之前就开始听，方便烟测。
+ * 【协作】创建 Database、Dispatch、TcpServer、MainWindow。用户端填底栏 IP:8888。
+ * 【详见】docs/模块与协作说明.md
  */
 #include "appstyle.h"
 #include "database.h"

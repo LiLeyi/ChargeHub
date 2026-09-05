@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""充电负荷预测：先做按小时统计基线，样本足够时再用线性回归。"""
+"""充电负荷预测。
+
+职责：写入 load_forecast 等分析表，给大屏和管理端智能分析页。
+原理：按电站+星期+小时聚合已完成订单；样本少用均值。
+协作：不改 charge_order / user.balance / pile.status。管理端 refreshForecast 也会重算一部分。
+"""
 from __future__ import annotations
 
 import sqlite3

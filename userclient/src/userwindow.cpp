@@ -1,6 +1,9 @@
 /**
  * @file userwindow.cpp
- * @brief 用户端页面与交互，所有写操作只发 Socket 请求
+ * @brief 用户端页面。按钮 → Client::request；回包 → onResp。不打开数据库。
+ *
+ * 页：登录 / 找站 / 桩列表 / 充电 / 订单 / 评价 / 预约 / 我的。
+ * 充电刷新：PUSH_CHARGE 与 pollCharge 并存，旧字段不删。
  */
 #include "userwindow.h"
 #include "uidialog.h"

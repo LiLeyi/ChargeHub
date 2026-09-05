@@ -3,10 +3,13 @@
 
 /**
  * @file mainwindow.h
- * @brief 运营管理端主窗口：电站、电桩、用户、订单、智能分析。
+ * @brief 运营桌面：电站 / 电桩 / 用户 / 订单 / 智能分析 / 审计。
  *
- * 与 TcpServer 同进程，直接调 Dispatch，不向 8888 再连一次。
- * 打开 Web 大屏只是启动 Flask 并打开浏览器，大屏自己只读 SQLite。
+ * 【职责】展示 Dispatch 查出来的表，把按钮转成 Dispatch 调用。
+ * 【原理】与 TcpServer 同进程，不连 8888。refresh() 定时拉 KPI 和表格。
+ *         弹窗用 UiSheet，只改外观，不改接口字段。
+ * 【协作】openDash() 只启动 Flask；大屏自己只读库，不经本窗口写单。
+ * 【详见】docs/模块与协作说明.md
  */
 #include "chartwidget.h"
 #include "dispatch.h"

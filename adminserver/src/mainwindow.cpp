@@ -1,6 +1,6 @@
 /**
  * @file mainwindow.cpp
- * @brief 管理端界面：导航、表格、图表刷新与运营操作
+ * @brief 运营窗口。refresh() 读 Dispatch；按钮写 Dispatch。不经 8888。
  */
 #include "mainwindow.h"
 #include "uidialog.h"

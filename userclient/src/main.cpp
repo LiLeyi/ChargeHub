@@ -1,6 +1,8 @@
 /**
  * @file main.cpp
- * @brief 用户端入口：仅通过 TCP 连接管理端，不打开数据库
+ * @brief 用户端入口：套样式后打开 UserWindow，不打开 SQLite。
+ *
+ * 样式管登录页和弹窗（UiSheet）。业务全在 UserWindow + Client。
  */
 #include "appstyle.h"
 #include "userwindow.h"
