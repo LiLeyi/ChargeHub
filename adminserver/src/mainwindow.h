@@ -29,8 +29,14 @@ public:
 private slots:
     void refresh();
     void rebootPile();
+    void markFault();
     void freeze(bool on);
     void addStation();
+    void editStation();
+    void enableTariff();
+    void adoptPlan();
+    void forceStop();
+    void forceSettle();
     void genForecast();
     void openDash();
 private:
@@ -68,6 +74,7 @@ private:
     QTableWidget *alertTable_ = nullptr;
     QTableWidget *nlpTable_ = nullptr;
     QTableWidget *orderTable_ = nullptr;
+    QTableWidget *auditTable_ = nullptr;
     QLineEdit *userKw_ = nullptr;
     QLineEdit *orderKw_ = nullptr;
 };

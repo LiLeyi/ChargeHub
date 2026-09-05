@@ -106,7 +106,8 @@ CREATE TABLE IF NOT EXISTS reservation (
     pile_id INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT '有效',
     expire_at TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    no_show INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS station_review (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -155,6 +156,19 @@ CREATE TABLE IF NOT EXISTS dispatch_plan (
     priority INTEGER NOT NULL,
     reason TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tariff_rule (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    station_id INTEGER NOT NULL,
+    start_hour INTEGER NOT NULL,
+    end_hour INTEGER NOT NULL,
+    price_per_kwh REAL NOT NULL,
+    label TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS session (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS analysis_report (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -237,6 +251,29 @@ bool Database::open()
     }
     if (!hasPile)
         db.exec("ALTER TABLE station_review ADD COLUMN pile_id INTEGER NOT NULL DEFAULT 0");
+    auto addCol = [&](const char *table, const char *name, const char *def) {
+        q.exec(QString("PRAGMA table_info(%1)").arg(QLatin1String(table)));
+        bool has = false;
+        while (q.next()) {
+            if (q.value(1).toString() == QLatin1String(name))
+                has = true;
+        }
+        if (!has)
+            db.exec(QString("ALTER TABLE %1 ADD COLUMN %2 %3")
+                        .arg(QLatin1String(table), QLatin1String(name), QLatin1String(def)));
+    };
+    addCol("reservation", "no_show", "INTEGER NOT NULL DEFAULT 0");
+    addCol("pile", "last_seen_at", "TEXT NOT NULL DEFAULT ''");
+    addCol("pile", "fault_code", "TEXT NOT NULL DEFAULT ''");
+    addCol("pile", "fault_at", "TEXT NOT NULL DEFAULT ''");
+    addCol("dispatch_plan", "adopted", "INTEGER NOT NULL DEFAULT 0");
+    addCol("dispatch_plan", "adopted_at", "TEXT NOT NULL DEFAULT ''");
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_order_user_open ON charge_order(user_id) "
+            "WHERE status IN ('充电中','待结算')");
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_order_pile_charging ON charge_order(pile_id) "
+            "WHERE status='充电中'");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_reservation_pile_status ON reservation(pile_id, status)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at)");
     db.exec("UPDATE station_review SET pile_id=("
             "SELECT p.id FROM pile p WHERE p.station_id=station_review.station_id ORDER BY p.id LIMIT 1"
             ") WHERE IFNULL(pile_id,0)=0");
@@ -413,6 +450,26 @@ bool Database::open()
             }
         }
     }
+
+    q.exec("SELECT COUNT(*) FROM tariff_rule");
+    q.next();
+    if (q.value(0).toInt() == 0) {
+        const auto stations = query("SELECT id, price_per_kwh FROM station");
+        for (const auto &s : stations) {
+            const int sid = s.value("id").toInt();
+            const double base = s.value("price_per_kwh").toDouble();
+            const double valley = qRound(base * 0.85 * 100) / 100.0;
+            const double peak = qRound(base * 1.25 * 100) / 100.0;
+            execute("INSERT INTO tariff_rule(station_id,start_hour,end_hour,price_per_kwh,label) VALUES(?,?,?,?,?)",
+                    {sid, 0, 7, valley, QString::fromUtf8("谷")});
+            execute("INSERT INTO tariff_rule(station_id,start_hour,end_hour,price_per_kwh,label) VALUES(?,?,?,?,?)",
+                    {sid, 7, 17, base, QString::fromUtf8("平")});
+            execute("INSERT INTO tariff_rule(station_id,start_hour,end_hour,price_per_kwh,label) VALUES(?,?,?,?,?)",
+                    {sid, 17, 22, peak, QString::fromUtf8("峰")});
+            execute("INSERT INTO tariff_rule(station_id,start_hour,end_hour,price_per_kwh,label) VALUES(?,?,?,?,?)",
+                    {sid, 22, 24, valley, QString::fromUtf8("谷")});
+        }
+    }
     return true;
 }
 
@@ -444,9 +501,34 @@ int Database::execute(const QString &sql, const QVariantList &args)
 {
     QMutexLocker locker(&mutex_);
     QSqlQuery q(conn());
-    q.prepare(sql);
+    if (!q.prepare(sql)) {
+        lastError_ = q.lastError().text();
+        return -1;
+    }
     for (const QVariant &a : args)
         q.addBindValue(a);
-    q.exec();
+    if (!q.exec()) {
+        lastError_ = q.lastError().text();
+        return -1;
+    }
+    lastError_.clear();
     return q.lastInsertId().toInt();
+}
+
+bool Database::transaction(const std::function<bool()> &fn)
+{
+    QMutexLocker locker(&mutex_);
+    QSqlDatabase db = conn();
+    if (!db.transaction()) {
+        lastError_ = db.lastError().text();
+        return false;
+    }
+    const bool ok = fn();
+    if (ok && db.commit()) {
+        lastError_.clear();
+        return true;
+    }
+    lastError_ = lastError_.isEmpty() ? db.lastError().text() : lastError_;
+    db.rollback();
+    return false;
 }

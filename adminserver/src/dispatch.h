@@ -17,6 +17,7 @@
 #include <QHash>
 #include <QJsonObject>
 #include <QMutex>
+#include <QPair>
 #include <QString>
 #include <QVariantMap>
 #include <QVector>
@@ -43,15 +44,32 @@ public:
     QVector<QVariantMap> listReviewNlp() const;
     QVariantMap latestReport() const;
     QString rebootPile(int pileId);
+    QString markPileFault(int pileId);
+    QString restorePile(int pileId);
+    QString updateStation(int stationId, const QVariantMap &data);
+    QString forceStopOrder(int orderId);
+    QString forceSettleOrder(int orderId);
+    QVector<QVariantMap> listAudit(int limit = 80) const;
+    int userIdOfToken(const QString &token) const;
+    void releaseStaleSession(int userId);
     void freezeUser(int userId, bool freeze);
     int addStation(const QVariantMap &data);
     int refreshForecast();
+    QString applyDefaultTariff(int stationId);
+    QString adoptDispatchPlan(int planId);
+    QJsonObject chargePushFor(int userId) const;
 
 private:
     Database *db_;
     mutable QMutex sessionMutex_;
     mutable QHash<QString, int> tokenUser_;
     mutable QHash<QString, qint64> tokenAt_;
+    mutable QHash<QString, qint64> tokenDbAt_;
+    mutable QMutex idemMutex_;
+    QHash<QString, QPair<qint64, QJsonObject>> idemCache_;
+    void loadSessions();
+    void persistSession(const QString &token, int userId) const;
+    void forgetSession(const QString &token) const;
     QString issueToken(int userId);
     int userIdByToken(const QString &token) const;
     void dropUser(int userId);
@@ -65,7 +83,7 @@ private:
     QJsonObject closeAccount(const QVariantMap &user);
     QJsonObject queryPiles(const QVariantMap &user, const QJsonObject &data);
     QJsonObject startCharge(const QVariantMap &user, const QJsonObject &data);
-    QJsonObject chargeStatus(const QVariantMap &user);
+    QJsonObject chargeStatus(const QVariantMap &user) const;
     QJsonObject stopCharge(const QVariantMap &user);
     QJsonObject settle(const QVariantMap &user);
     QJsonObject listOrders(const QVariantMap &user);

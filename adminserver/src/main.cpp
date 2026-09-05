@@ -10,11 +10,11 @@
 #include "dispatch.h"
 #include "mainwindow.h"
 #include "tcpserver.h"
+#include "uidialog.h"
 
 #include <QApplication>
 #include <QColor>
 #include <QCoreApplication>
-#include <QDialog>
 #include <QDir>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -25,7 +25,6 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QLockFile>
-#include <QMessageBox>
 #include <QPalette>
 #include <QPushButton>
 #include <QStatusBar>
@@ -57,12 +56,12 @@ int main(int argc, char *argv[])
 QWidget { font-family:"Microsoft YaHei","Noto Sans CJK SC"; font-size:13px; color:#ECEDEE; }
 QMainWindow, QDialog, QWidget#root, QWidget#page, QStackedWidget { background:#09090B; }
 QFrame#sidebar { background:#0C0C0E; border:none; }
-QLineEdit, QSpinBox {
-    background:#18181B; border:1px solid #3F3F46; border-radius:8px;
-    padding:8px 12px; color:#FAFAFA; min-height:22px;
+QLineEdit, QSpinBox, QDoubleSpinBox {
+    background:#18181B; border:1px solid #3F3F46; border-radius:10px;
+    padding:10px 14px; color:#FAFAFA; min-height:26px;
     selection-background-color:#14B8A6; selection-color:#052E2B;
 }
-QLineEdit:focus, QSpinBox:focus { border:1px solid #14B8A6; }
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus { border:1px solid #14B8A6; }
 QComboBox {
     background:#18181B; border:1px solid #3F3F46; border-radius:8px;
     padding:6px 28px 6px 12px; color:#FAFAFA; min-height:22px; min-width:108px;
@@ -87,6 +86,8 @@ QPushButton#ghost {
 }
 QPushButton#ghost:hover { background:#27272A; border:1px solid #52525B; }
 QPushButton#primary { min-height:46px; font-size:15px; }
+QPushButton#danger { background:#DC2626; color:#FFFFFF; }
+QPushButton#danger:hover { background:#B91C1C; }
 QListWidget#nav {
     background:transparent; border:none; padding:6px 4px; font-size:14px; outline:none;
 }
@@ -138,7 +139,22 @@ QScrollBar::handle:horizontal {
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { height:0; width:0; border:none; }
 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background:none; }
 QStatusBar { background:#0C0C0E; color:#A1A1AA; }
-QMessageBox { background:#18181B; color:#FAFAFA; }
+QDialog#uiSheet { background:#141417; border:1px solid #3F3F46; }
+QFrame#uiSheetHead { background:#141417; border:none; border-bottom:1px solid #27272A; }
+QFrame#uiSheetFoot { background:#111113; border:none; border-top:1px solid #27272A; }
+QLabel#uiSheetTitle { font-size:22px; font-weight:800; color:#FAFAFA; }
+QLabel#uiSheetHint { font-size:14px; color:#A1A1AA; line-height:22px; }
+QLabel#uiField { font-size:13px; font-weight:700; color:#D4D4D8; }
+QLabel#uiBadgeInfo, QLabel#uiBadgeWarn, QLabel#uiBadgeErr, QLabel#uiBadgeAsk {
+    border-radius:16px; font-size:22px; font-weight:800;
+}
+QLabel#uiBadgeInfo { background:#134E4A; color:#5EEAD4; }
+QLabel#uiBadgeWarn { background:#713F12; color:#FCD34D; }
+QLabel#uiBadgeErr { background:#7F1D1D; color:#FECACA; }
+QLabel#uiBadgeAsk { background:#1E3A5F; color:#93C5FD; }
+QMessageBox { background:#141417; color:#FAFAFA; min-width:480px; }
+QMessageBox QLabel { font-size:14px; min-width:360px; padding:8px 4px; }
+QMessageBox QPushButton { min-width:108px; min-height:40px; }
 QToolTip { background:#18181B; color:#FAFAFA; border:1px solid #3F3F46; padding:6px 8px; }
 )"));
 
@@ -147,47 +163,38 @@ QToolTip { background:#18181B; color:#FAFAFA; border:1px solid #3F3F46; padding:
     QLockFile instanceLock(QFileInfo(dbPath).absolutePath() + QStringLiteral("/chargehub.lock"));
     instanceLock.setStaleLockTime(30000);
     if (!instanceLock.tryLock(200)) {
-        QMessageBox::critical(
-            nullptr, "ChargeHub",
-            QString::fromUtf8(
-                "已经有一个管理端在运行。\n\n"
-                "管理端就是服务器：同一时刻全组只能开一份，否则会各写各的库、用户端连错机器。\n"
-                "请关掉另一份管理端，或到那台电脑上操作。\n"
-                "其他人请只开用户端，服务器地址填那台电脑底栏里的 IP:8888。"));
+        uiError(nullptr, QString::fromUtf8("已经在运行"),
+                QString::fromUtf8(
+                    "已经有一个管理端在运行。\n\n"
+                    "管理端就是服务器：同一时刻全组只能开一份，否则会各写各的库、用户端连错机器。\n"
+                    "请关掉另一份管理端，或到那台电脑上操作。\n"
+                    "其他人请只开用户端，服务器地址填那台电脑底栏里的 IP:8888。"));
         return 1;
     }
     Database db(dbPath);
     if (!db.open()) {
-        QMessageBox::critical(nullptr, "ChargeHub", QString::fromUtf8("无法打开数据库"));
+        uiError(nullptr, QString::fromUtf8("无法启动"), QString::fromUtf8("无法打开数据库"));
         return 1;
     }
     Dispatch dispatch(&db);
     TcpServer server(&dispatch);
     if (!server.listen(QHostAddress::Any, 8888)) {
-        QMessageBox::critical(
-            nullptr, "ChargeHub",
-            QString::fromUtf8(
-                "端口 8888 被占用（通常是另一份管理端还在）。\n"
-                "请结束旧的 adminserver 后再开。全组联调只允许一台电脑开管理端。"));
+        uiError(nullptr, QString::fromUtf8("端口被占用"),
+                QString::fromUtf8(
+                    "端口 8888 被占用（通常是另一份管理端还在）。\n"
+                    "请结束旧的 adminserver 后再开。全组联调只允许一台电脑开管理端。"));
         return 1;
     }
 
-    QDialog login;
+    UiSheet login(nullptr, QString::fromUtf8("运营管理平台"),
+                  QString::fromUtf8("演示账号 admin / 123456，也可在下方注册新管理员。"));
     login.setWindowTitle(QString::fromUtf8("ChargeHub 运营后台"));
-    login.setMinimumSize(480, 460);
-    auto *lay = new QVBoxLayout(&login);
-    lay->setContentsMargins(36, 32, 36, 28);
-    lay->setSpacing(8);
+    login.polish(560, 640);
     auto *mark = new QLabel(QStringLiteral("CH"));
     mark->setObjectName("logoMark");
-    mark->setFixedSize(44, 44);
+    mark->setFixedSize(52, 52);
     mark->setAlignment(Qt::AlignCenter);
-    mark->setStyleSheet("background:#14B8A6;color:#042F2E;border-radius:12px;font-size:15px;font-weight:800;");
-    auto *title = new QLabel(QString::fromUtf8("运营管理平台"));
-    title->setObjectName("title");
-    auto *hint = new QLabel(QString::fromUtf8("演示账号 admin / 123456，也可注册新管理员"));
-    hint->setObjectName("muted");
-    hint->setWordWrap(true);
+    mark->setStyleSheet("background:#14B8A6;color:#042F2E;border-radius:14px;font-size:16px;font-weight:800;");
     auto *u = new QLineEdit("admin");
     u->setPlaceholderText(QString::fromUtf8("管理员账号（字母开头，3~16 位）"));
     auto *p = new QLineEdit("123456");
@@ -196,43 +203,32 @@ QToolTip { background:#18181B; color:#FAFAFA; border:1px solid #3F3F46; padding:
     auto *p2 = new QLineEdit("123456");
     p2->setEchoMode(QLineEdit::Password);
     p2->setPlaceholderText(QString::fromUtf8("确认密码（仅注册需要）"));
-    auto *loginBtn = new QPushButton(QString::fromUtf8("登  录"));
-    loginBtn->setObjectName("primary");
-    loginBtn->setDefault(true);
-    loginBtn->setMinimumHeight(46);
-    auto *regBtn = new QPushButton(QString::fromUtf8("注册新管理员"));
-    regBtn->setObjectName("ghost");
-    lay->addWidget(mark);
-    lay->addSpacing(8);
-    lay->addWidget(title);
-    lay->addWidget(hint);
-    lay->addSpacing(12);
-    lay->addWidget(new QLabel(QString::fromUtf8("账号")));
-    lay->addWidget(u);
-    lay->addWidget(new QLabel(QString::fromUtf8("密码")));
-    lay->addWidget(p);
-    lay->addWidget(p2);
-    lay->addStretch(1);
-    lay->addWidget(loginBtn);
-    lay->addWidget(regBtn);
+    login.body()->addWidget(mark, 0, Qt::AlignLeft);
+    login.body()->addSpacing(4);
+    uiAddField(login.body(), QString::fromUtf8("账号"), u);
+    uiAddField(login.body(), QString::fromUtf8("密码"), p);
+    uiAddField(login.body(), QString::fromUtf8("确认密码"), p2);
+    login.body()->addStretch(1);
+    auto *regBtn = login.addGhost(QString::fromUtf8("注册新管理员"));
+    auto *loginBtn = login.addPrimary(QString::fromUtf8("登  录"));
     QObject::connect(loginBtn, &QPushButton::clicked, [&]() {
         const QJsonObject r = dispatch.adminLogin(u->text().trimmed(), p->text());
         if (r.value("ok").toBool())
             login.accept();
         else
-            QMessageBox::warning(&login, QString::fromUtf8("登录失败"), r.value("message").toString());
+            uiWarn(&login, QString::fromUtf8("登录失败"), r.value("message").toString());
     });
     QObject::connect(regBtn, &QPushButton::clicked, [&]() {
         if (p->text() != p2->text()) {
-            QMessageBox::warning(&login, QString::fromUtf8("注册失败"), QString::fromUtf8("两次输入的密码不一致"));
+            uiWarn(&login, QString::fromUtf8("注册失败"), QString::fromUtf8("两次输入的密码不一致"));
             return;
         }
         const QJsonObject r = dispatch.adminRegister(u->text().trimmed(), p->text());
         if (!r.value("ok").toBool()) {
-            QMessageBox::warning(&login, QString::fromUtf8("注册失败"), r.value("message").toString());
+            uiWarn(&login, QString::fromUtf8("注册失败"), r.value("message").toString());
             return;
         }
-        QMessageBox::information(&login, QString::fromUtf8("注册成功"), QString::fromUtf8("账号已创建，正在进入系统"));
+        uiInfo(&login, QString::fromUtf8("注册成功"), QString::fromUtf8("账号已创建，正在进入系统"));
         login.accept();
     });
     if (login.exec() != QDialog::Accepted)

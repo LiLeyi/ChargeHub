@@ -6,7 +6,7 @@
  * @brief 用户端 ↔ 管理端 的唯一通信格式（管理端 GUI 不走这里）。
  *
  * 传输：TCP。默认端口 8888。
- * 帧：先 4 字节大端无符号长度，再等长的 UTF-8 JSON。
+ * 帧：先 4 字节大端无符号长度，再等长的 UTF-8 JSON（单帧不超过 1MB）。
  * JSON 请求：{ type, seq, role:"user", token, data }
  * JSON 响应：{ type, seq, code, message, data }  code==0 成功。
  * 用户端禁止直连 SQLite；所有业务由管理端 Dispatch 写库后回包。

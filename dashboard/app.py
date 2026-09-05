@@ -5,6 +5,7 @@ HTTP（默认 0.0.0.0:5000，组员浏览器可填服务器 IP）：
   GET /              index.html
   GET /api/overview  今日/本月营收、桩状态、地图点
   GET /api/analysis  负荷预测与告警（读分析表）
+  GET /api/tariffs   分时电价（只读）
 
 库路径优先环境变量 CHARGEHUB_DB，否则找管理端 data/chargehub.db。
 """
@@ -174,6 +175,31 @@ def analysis():
             "risks": risks,
             "alerts": alerts,
             "plan": plan,
+            "updated": datetime.now().strftime("%H:%M:%S"),
+        }
+    )
+
+
+@app.get("/api/tariffs")
+def tariffs():
+    rows = q(
+        "SELECT t.station_id, s.name, t.start_hour, t.end_hour, t.price_per_kwh, t.label "
+        "FROM tariff_rule t JOIN station s ON s.id=t.station_id "
+        "ORDER BY t.station_id, t.start_hour"
+    )
+    return jsonify(
+        {
+            "items": [
+                {
+                    "stationId": r.get("station_id"),
+                    "station": r.get("name"),
+                    "startHour": r.get("start_hour"),
+                    "endHour": r.get("end_hour"),
+                    "pricePerKwh": r.get("price_per_kwh"),
+                    "label": r.get("label"),
+                }
+                for r in rows
+            ],
             "updated": datetime.now().strftime("%H:%M:%S"),
         }
     )

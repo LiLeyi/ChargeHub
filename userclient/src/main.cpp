@@ -22,12 +22,12 @@ QFrame#topbar { background:#FFFFFF; border:none; border-bottom:1px solid #E6E8EC
 QFrame#toolbar {
     background:#FFFFFF; border:1px solid #E6E8EC; border-radius:12px;
 }
-QLineEdit {
-    background:#FFFFFF; border:1px solid #E2E8F0; border-radius:8px;
-    padding:8px 12px; color:#111827; min-height:22px;
+QLineEdit, QSpinBox, QDoubleSpinBox {
+    background:#FFFFFF; border:1px solid #E2E8F0; border-radius:10px;
+    padding:10px 14px; color:#111827; min-height:26px;
     selection-background-color:#0D9488; selection-color:#FFFFFF;
 }
-QLineEdit:focus { border:1px solid #0D9488; }
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus { border:1px solid #0D9488; }
 QComboBox {
     background:#FFFFFF; border:1px solid #E2E8F0; border-radius:8px;
     padding:6px 28px 6px 12px; color:#111827; min-height:22px; min-width:108px;
@@ -143,7 +143,22 @@ QScrollBar::handle:horizontal {
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { height:0; width:0; border:none; }
 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background:none; }
 QStatusBar { background:#0F172A; color:#94A3B8; padding:4px 12px; }
-QMessageBox { font-size:14px; }
+QDialog#uiSheet { background:#FFFFFF; border:1px solid #E2E8F0; }
+QFrame#uiSheetHead { background:#FFFFFF; border:none; border-bottom:1px solid #E6E8EC; }
+QFrame#uiSheetFoot { background:#F8FAFC; border:none; border-top:1px solid #E6E8EC; }
+QLabel#uiSheetTitle { font-size:22px; font-weight:800; color:#0F172A; }
+QLabel#uiSheetHint { font-size:14px; color:#64748B; line-height:22px; }
+QLabel#uiField { font-size:13px; font-weight:700; color:#334155; }
+QLabel#uiBadgeInfo, QLabel#uiBadgeWarn, QLabel#uiBadgeErr, QLabel#uiBadgeAsk {
+    border-radius:16px; font-size:22px; font-weight:800;
+}
+QLabel#uiBadgeInfo { background:#CCFBF1; color:#0F766E; }
+QLabel#uiBadgeWarn { background:#FEF3C7; color:#B45309; }
+QLabel#uiBadgeErr { background:#FEE2E2; color:#B91C1C; }
+QLabel#uiBadgeAsk { background:#DBEAFE; color:#1D4ED8; }
+QMessageBox { background:#FFFFFF; color:#0F172A; min-width:480px; }
+QMessageBox QLabel { font-size:14px; min-width:360px; padding:8px 4px; }
+QMessageBox QPushButton { min-width:108px; min-height:40px; }
 QToolTip { background:#0F172A; color:#F8FAFC; border:none; padding:6px 8px; }
 )"));
     UserWindow w;
