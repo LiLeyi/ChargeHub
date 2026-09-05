@@ -3,10 +3,14 @@
 
 /**
  * @file userwindow.h
- * @brief 充电用户端主界面：登录、找桩、预约、充电、订单、个人中心。
+ * @brief 用户端全部页面：登录、找桩、预约、充电、订单、评价、个人中心。
  *
- * 所有按钮最终都走 Client::request。登录页「服务器地址」即管理端 IP:端口。
- * 本机自测填 127.0.0.1:8888；连组里服务器填那台电脑底栏的局域网 IP:8888。
+ * 【职责】画界面、做格式校验、把按钮变成 Socket 请求；不写 SQLite。
+ * 【原理】root_ 两页（登录 / 主壳）；pages_ 里各业务页。所有写操作 → Client::request。
+ *         回包统一 onResp：失败弹 UiSheet；PUSH_CHARGE 只刷新充电页。
+ * 【协作】依赖 Client、uidialog。地图用 HTTP 拉腾讯静态图，不经过管理端业务。
+ * 【联调】服务器填管理端底栏 IP:8888；本机自测 127.0.0.1:8888。
+ * 【详见】docs/模块与协作说明.md
  */
 
 #include "client.h"
@@ -33,68 +37,125 @@ class QNetworkAccessManager;
 class UserWindow : public QMainWindow {
     Q_OBJECT
 public:
+    /**
+     * 搭登录页和主壳、接 Client 信号、准备充电轮询定时器。
+     * 不打开数据库，也不在构造时立刻拨号（等用户点登录）。
+     */
     explicit UserWindow(QWidget *parent = nullptr);
 
 private slots:
+    /** 校验手机号/密码长度，记下 pendingAuth_=LOGIN，已连接则发出，否则 reconnect。 */
     void doLogin();
+    /** 还要两次密码一致。pendingAuth_=REGISTER，其余同 doLogin。 */
     void doRegister();
+    /** 按地址关键字和半径发 QUERY_STATIONS，data 带当前 coord()。 */
     void queryStations();
+    /**
+     * 处理所有 Socket 回包与 PUSH_CHARGE。
+     * code≠0 弹窗（登录失败才退回登录页）；成功按 type 分支刷新对应页。
+     */
     void onResp(QJsonObject obj);
+    /** 充电中定时发 CHARGE_STATUS，作为 PUSH_CHARGE 的补充（旧客户端也靠它）。 */
     void pollCharge();
 
 private:
+    /** 当前定位 {lat,lng}，给找站和导航。默认北京演示点。 */
     QJsonObject coord() const;
+    /** 把回包里的 user 存进 user_，刷新顶栏余额/头像。 */
     void applyUser(const QJsonObject &u);
+    /** 登录成功：root_ 切到主壳，拉一次电站列表。 */
     void showShell();
+    /** 左边导航点第 i 项：切 pages_，必要时发 LIST_ORDERS / LIST_RESERVATIONS。 */
     void switchTab(int i);
+    /** 画附近电站卡片（距离、电价、进站按钮）。 */
     void renderStations(const QJsonObject &data);
+    /** 画某站桩列表（状态、预约、开充、评价）。 */
     void renderPiles(const QJsonObject &data);
+    /** 画订单卡片；orderFilter_ 可筛充电中/待结算/已完成。 */
     void renderOrders(const QJsonArray &arr);
+    /** 画充值流水。 */
     void renderRecharge(const QJsonArray &arr);
+    /** 画预约列表；可取消未过期的。 */
     void renderReservations(const QJsonArray &arr);
+    /** 画某桩评价页：均分、星、已有评论、情感摘要。 */
     void renderPileReview(const QJsonObject &data);
+    /** 刷新充电页：时长、电量、费用、分时标签；切换停充/结算按钮。 */
     void showCharge(const QJsonObject &order);
+    /**
+     * 先 CHARGE_STATUS 探有没有未完成单，没有再 START_CHARGE。
+     * 服务端 startCharge 还会再拦一次。
+     */
     void tryStart(int pileId);
+    /** 对空闲桩发 RESERVE_PILE。 */
     void doReserve(int pileId);
+    /** 记下 currentPile_，切到评价页并 LIST_PILE_REVIEWS。 */
     void openPileReview(const QJsonObject &pile);
+    /** 点亮 1~n 颗星，提交时带 score。 */
     void setReviewStars(int n);
+    /** 文字不能空，发 REVIEW_STATION（stationId/pileId/score/comment）。 */
     void submitReview();
+    /** 弹出地图+地址+导航入口；静态图走腾讯 HTTP，不经 Dispatch。 */
     void showStationLocation(const QJsonObject &station);
+    /** 打开系统浏览器或地图 App 做导航（经纬度来自电站）。 */
     void openNav(const QJsonObject &station);
+    /**
+     * 向腾讯路线规划 API 问开车/步行预估时间和距离。
+     * 结果写进 resultLabel；失败只改标签，不影响订单。
+     */
     void queryTencentRoute(const QJsonObject &station, const QString &mode,
                            QLabel *resultLabel, QPushButton *queryButton);
+    /** 「我的」页：发 UPDATE_PROFILE 空改动或再拉用户信息，刷新余额头像。 */
     void refreshMe();
+    /** 选本地图片，压成小图后 UPDATE_PROFILE 带 avatar。 */
     void pickAvatar();
+    /** 清掉头像字段再 UPDATE_PROFILE。 */
     void clearAvatar();
+    /** 把 user 里的头像 Base64 或首字母画到头像标签。 */
     void showAvatar(const QJsonObject &u);
+    /** 二次确认后发 CLOSE_ACCOUNT；成功退回登录页。 */
     void closeMyAccount();
+    /** 按登录页填的 host:port 重新 Client::connectTo。 */
     void reconnect();
+    /** 连上后把挂起的 LOGIN/REGISTER 真正 request 出去。 */
     void sendPendingAuth();
+    /** 登录页主机框；空则 127.0.0.1。 */
     QString serverHost() const;
+    /** 登录页端口；非法则 8888。 */
     quint16 serverPort() const;
+
+    /** 登录页：服务器地址、手机、密码、注册确认。 */
     QWidget *buildLogin();
+    /** 主壳：左边导航 + 顶栏 + pages_。 */
     QWidget *buildShell();
+    /** 找站页：地址、半径、电站列表。 */
     QWidget *buildHome();
+    /** 桩列表页。 */
     QWidget *buildPiles();
+    /** 充电进行页：状态、停充、结算。 */
     QWidget *buildCharge();
+    /** 订单 + 充值流水页。 */
     QWidget *buildOrders();
+    /** 个人中心：昵称、充值、头像、注销。 */
     QWidget *buildMe();
+    /** 评价页：星、正文、历史评论。 */
     QWidget *buildPileReview();
+    /** 预约列表页。 */
     QWidget *buildReservations();
+    /** 清空布局里的控件，重新 render 前用。 */
     static void clearBox(QLayout *lay);
 
     Client client_;
-    QNetworkAccessManager *mapNetwork_ = nullptr;
-    QTimer poll_;
-    QString token_;
-    QJsonObject user_;
-    QJsonObject currentStation_;
-    QJsonObject currentOrder_;
-    QJsonObject currentPile_;
-    int pendingPile_ = 0;
+    QNetworkAccessManager *mapNetwork_ = nullptr; ///< 仅腾讯地图 HTTP
+    QTimer poll_;                                 ///< 充电中轮询 CHARGE_STATUS
+    QString token_;                               ///< 登录后通行证，之后每请求都带
+    QJsonObject user_;                            ///< 当前用户公开字段
+    QJsonObject currentStation_;                  ///< 点进去的那座站
+    QJsonObject currentOrder_;                    ///< 充电页正在看的订单
+    QJsonObject currentPile_;                     ///< 评价页正在看的桩
+    int pendingPile_ = 0;                         ///< tryStart 等待 CHARGE_STATUS 时记下的桩
     int reviewStars_ = 5;
-    bool wantStart_ = false;
-    QString pendingAuth_;
+    bool wantStart_ = false;                      ///< CHARGE_STATUS 回来后是否接着开充
+    QString pendingAuth_;                         ///< "LOGIN" / "REGISTER" / 空
     QString pendingPhone_;
     QString pendingPwd_;
 

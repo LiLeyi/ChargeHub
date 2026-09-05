@@ -1,8 +1,9 @@
 /**
  * @file mainwindow.cpp
- * @brief 管理端界面：导航、表格、图表刷新与运营操作
+ * @brief 运营窗口。refresh() 读 Dispatch；按钮写 Dispatch。不经 8888。
  */
 #include "mainwindow.h"
+#include "uidialog.h"
 
 #include <algorithm>
 #include <QAbstractItemView>
@@ -10,11 +11,8 @@
 #include <QColor>
 #include <QCoreApplication>
 #include <QDesktopServices>
-#include <QDialog>
-#include <QDialogButtonBox>
 #include <QDir>
 #include <QFileInfo>
-#include <QFormLayout>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -22,13 +20,13 @@
 #include <QJsonObject>
 #include <QMap>
 #include <QListView>
-#include <QMessageBox>
 #include <QPair>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSizePolicy>
+#include <QDoubleSpinBox>
 #include <QSpinBox>
 #include <QTimer>
 #include <QUrl>
@@ -134,7 +132,8 @@ MainWindow::MainWindow(Dispatch *dispatch, QWidget *parent)
     nav_->setFocusPolicy(Qt::NoFocus);
     nav_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     nav_->addItems({u8("销售业绩"), u8("电桩状态"), u8("充电桩管理"), u8("充电站管理"),
-                    u8("用户管理"), u8("订单跟踪"), u8("运营决策大屏"), u8("智能分析")});
+                    u8("用户管理"), u8("订单跟踪"), u8("运营决策大屏"), u8("智能分析"),
+                    u8("操作审计")});
     sidel->addWidget(nav_, 1);
     stack_ = new QStackedWidget;
     body->addWidget(side);
@@ -207,8 +206,12 @@ MainWindow::MainWindow(Dispatch *dispatch, QWidget *parent)
     pbl->addWidget(plab);
     pbl->addStretch(1);
     pbl->addWidget(pileFilter_);
-    auto *reboot = new QPushButton(u8("远程重启选中电桩"));
+    auto *reboot = new QPushButton(u8("远程重启 / 恢复"));
+    auto *fault = new QPushButton(u8("标记故障"));
+    fault->setObjectName("ghost");
     connect(reboot, &QPushButton::clicked, this, &MainWindow::rebootPile);
+    connect(fault, &QPushButton::clicked, this, &MainWindow::markFault);
+    pbl->addWidget(fault);
     pbl->addWidget(reboot);
     pll->addWidget(pbar);
     pileTable_ = makeTable({u8("编号"), u8("电站"), u8("类型"), u8("功率kW"), u8("状态"), u8("累计次数"), u8("累计时长(分)")});
@@ -222,10 +225,18 @@ MainWindow::MainWindow(Dispatch *dispatch, QWidget *parent)
     stationBar->addWidget(new QLabel(u8("充电站管理")));
     stationBar->addStretch();
     auto *add = new QPushButton(u8("新增电站"));
+    auto *editSt = new QPushButton(u8("修改选中电站"));
+    auto *tariffBtn = new QPushButton(u8("启用分时电价"));
+    editSt->setObjectName("ghost");
+    tariffBtn->setObjectName("ghost");
     connect(add, &QPushButton::clicked, this, &MainWindow::addStation);
+    connect(editSt, &QPushButton::clicked, this, &MainWindow::editStation);
+    connect(tariffBtn, &QPushButton::clicked, this, &MainWindow::enableTariff);
+    stationBar->addWidget(tariffBtn);
+    stationBar->addWidget(editSt);
     stationBar->addWidget(add);
     snl->addLayout(stationBar);
-    stationTable_ = makeTable({"ID", u8("站名"), u8("地址"), u8("经纬度"), u8("桩数"), u8("在线率")});
+    stationTable_ = makeTable({"ID", u8("站名"), u8("地址"), u8("经纬度"), u8("电价"), u8("桩数"), u8("在线率")});
     snl->addWidget(stationTable_);
     asPage(sn);
     stack_->addWidget(sn);
@@ -259,10 +270,17 @@ MainWindow::MainWindow(Dispatch *dispatch, QWidget *parent)
     orderKw_ = new QLineEdit;
     orderKw_->setPlaceholderText(u8("订单号 / 手机号"));
     auto *os = new QPushButton(u8("查询订单"));
+    auto *fstop = new QPushButton(u8("强制结束充电"));
+    auto *fsettle = new QPushButton(u8("代结算"));
+    fstop->setObjectName("ghost");
     connect(os, &QPushButton::clicked, this, &MainWindow::refresh);
+    connect(fstop, &QPushButton::clicked, this, &MainWindow::forceStop);
+    connect(fsettle, &QPushButton::clicked, this, &MainWindow::forceSettle);
     obar->addWidget(new QLabel(u8("充电订单跟踪")));
     obar->addWidget(orderKw_, 1);
     obar->addWidget(os);
+    obar->addWidget(fstop);
+    obar->addWidget(fsettle);
     ol->addLayout(obar);
     orderTable_ = makeTable({u8("订单号"), u8("手机号"), u8("电站"), u8("电桩"), u8("状态"), u8("电量"), u8("金额"), u8("开始时间")});
     ol->addWidget(orderTable_);
@@ -321,10 +339,14 @@ MainWindow::MainWindow(Dispatch *dispatch, QWidget *parent)
     auto *ms = new QLabel(u8("负荷预测 · 故障风险 · 评价 NLP，均在管理端 C++ 计算"));
     ms->setObjectName("muted");
     auto *gen = new QPushButton(u8("刷新分析"));
+    auto *adopt = new QPushButton(u8("采纳选中调度建议"));
+    adopt->setObjectName("ghost");
     connect(gen, &QPushButton::clicked, this, &MainWindow::genForecast);
+    connect(adopt, &QPushButton::clicked, this, &MainWindow::adoptPlan);
     mbl->addWidget(mt);
     mbl->addSpacing(10);
     mbl->addWidget(ms, 1);
+    mbl->addWidget(adopt);
     mbl->addWidget(gen);
     mlay->addWidget(mbar);
     auto *mk = new QHBoxLayout;
@@ -381,7 +403,7 @@ MainWindow::MainWindow(Dispatch *dispatch, QWidget *parent)
     alertTable_ = makeTable({u8("级别"), u8("标题"), u8("详情"), u8("时间")});
     forecastTable_ = makeTable({u8("电站"), u8("窗口"), u8("预测电量kWh"), u8("预测空闲"), u8("高峰"), u8("时间")});
     riskTable_ = makeTable({u8("桩号"), u8("电站"), u8("分数"), u8("等级"), u8("原因")});
-    planTable_ = makeTable({u8("优先级"), u8("电站"), u8("6h负荷"), u8("建议")});
+    planTable_ = makeTable({u8("优先级"), u8("电站"), u8("6h负荷"), u8("建议"), u8("已采纳")});
     auto *mlg = new QGridLayout;
     mlg->setHorizontalSpacing(12);
     mlg->setVerticalSpacing(12);
@@ -396,6 +418,14 @@ MainWindow::MainWindow(Dispatch *dispatch, QWidget *parent)
     asPage(scroll);
     stack_->addWidget(scroll);
 
+    auto *au = new QWidget;
+    auto *aul = new QVBoxLayout(au);
+    aul->addWidget(new QLabel(u8("操作审计 · 冻结、改价、强制结束、断线释放都会落在这里")));
+    auditTable_ = makeTable({u8("时间"), u8("操作者"), u8("动作"), u8("对象"), u8("结果")});
+    aul->addWidget(auditTable_);
+    asPage(au);
+    stack_->addWidget(au);
+
     nav_->setCurrentRow(0);
     auto *timer = new QTimer(this);
     connect(timer, &QTimer::timeout, this, &MainWindow::refresh);
@@ -404,6 +434,7 @@ MainWindow::MainWindow(Dispatch *dispatch, QWidget *parent)
     refresh();
 }
 
+/** 从 Dispatch 拉 KPI、表格、图表；不经 8888。 */
 void MainWindow::refresh()
 {
     const QJsonObject s = dispatch_->salesSummary();
@@ -462,8 +493,9 @@ void MainWindow::refresh()
         stationTable_->setItem(i, 2, new QTableWidgetItem(r.value("address").toString()));
         stationTable_->setItem(i, 3, new QTableWidgetItem(
             QString("%1,%2").arg(r.value("lng").toDouble(), 0, 'f', 4).arg(r.value("lat").toDouble(), 0, 'f', 4)));
-        stationTable_->setItem(i, 4, new QTableWidgetItem(r.value("totalPiles").toString()));
-        stationTable_->setItem(i, 5, new QTableWidgetItem(QString::number(r.value("onlineRate").toDouble(), 'f', 1) + "%"));
+        stationTable_->setItem(i, 4, new QTableWidgetItem(QString::number(r.value("price_per_kwh").toDouble(), 'f', 2)));
+        stationTable_->setItem(i, 5, new QTableWidgetItem(r.value("totalPiles").toString()));
+        stationTable_->setItem(i, 6, new QTableWidgetItem(QString::number(r.value("onlineRate").toDouble(), 'f', 1) + "%"));
         int idle = 0, total = 0;
         for (const auto &p : piles) {
             if (p.value("station_id").toInt() != r.value("id").toInt())
@@ -498,6 +530,7 @@ void MainWindow::refresh()
     for (int i = 0; i < orders.size(); ++i) {
         const auto &o = orders[i];
         orderTable_->setItem(i, 0, new QTableWidgetItem(o.value("order_no").toString()));
+        orderTable_->item(i, 0)->setData(Qt::UserRole, o.value("id"));
         orderTable_->setItem(i, 1, new QTableWidgetItem(o.value("phone").toString()));
         orderTable_->setItem(i, 2, new QTableWidgetItem(o.value("station_name").toString()));
         orderTable_->setItem(i, 3, new QTableWidgetItem(o.value("pile_no").toString()));
@@ -543,9 +576,11 @@ void MainWindow::refresh()
     for (int i = 0; i < plans.size(); ++i) {
         const auto &f = plans[i];
         planTable_->setItem(i, 0, new QTableWidgetItem(QString::number(f.value("priority").toInt())));
+        planTable_->item(i, 0)->setData(Qt::UserRole, f.value("id"));
         planTable_->setItem(i, 1, new QTableWidgetItem(f.value("station").toString()));
         planTable_->setItem(i, 2, new QTableWidgetItem(QString::number(f.value("recommend").toDouble(), 'f', 1)));
         planTable_->setItem(i, 3, new QTableWidgetItem(f.value("reason").toString()));
+        planTable_->setItem(i, 4, new QTableWidgetItem(f.value("adopted").toInt() ? u8("是") : u8("否")));
     }
 
     const auto alerts = dispatch_->listAlerts();
@@ -617,56 +652,111 @@ void MainWindow::refresh()
         mlHint_->setText(u8("样本 %1 条 · 时间序 8:2 验证 · 禁止随机打乱 · 只写分析表，不改订单与余额")
                              .arg(rep.value("sample_n").toInt()));
     }
+
+    const auto audits = dispatch_->listAudit(80);
+    auditTable_->setRowCount(audits.size());
+    for (int i = 0; i < audits.size(); ++i) {
+        const auto &a = audits[i];
+        auditTable_->setItem(i, 0, new QTableWidgetItem(a.value("created_at").toString()));
+        auditTable_->setItem(i, 1, new QTableWidgetItem(a.value("actor").toString()));
+        auditTable_->setItem(i, 2, new QTableWidgetItem(a.value("action").toString()));
+        auditTable_->setItem(i, 3, new QTableWidgetItem(a.value("target").toString()));
+        auditTable_->setItem(i, 4, new QTableWidgetItem(a.value("result").toString()));
+    }
 }
 
+/** 选中行 → Dispatch::rebootPile。 */
 void MainWindow::rebootPile()
 {
     const int row = pileTable_->currentRow();
     if (row < 0) {
-        QMessageBox::information(this, u8("提示"), u8("请先选中电桩"));
+        uiInfo(this, u8("提示"), u8("请先选中电桩"));
         return;
     }
     const int id = pileTable_->item(row, 0)->data(Qt::UserRole).toInt();
-    QMessageBox::information(this, u8("远程重启"), dispatch_->rebootPile(id));
+    uiInfo(this, u8("远程重启"), dispatch_->rebootPile(id));
     refresh();
 }
 
+/** 选中行 → Dispatch::markPileFault。 */
+void MainWindow::markFault()
+{
+    const int row = pileTable_->currentRow();
+    if (row < 0) {
+        uiInfo(this, u8("提示"), u8("请先选中电桩"));
+        return;
+    }
+    const int id = pileTable_->item(row, 0)->data(Qt::UserRole).toInt();
+    uiInfo(this, u8("标记故障"), dispatch_->markPileFault(id));
+    refresh();
+}
+
+/** 冻结或解冻选中用户。 */
 void MainWindow::freeze(bool on)
 {
     const int row = userTable_->currentRow();
     if (row < 0) {
-        QMessageBox::information(this, u8("提示"), u8("请先选中用户"));
+        uiInfo(this, u8("提示"), u8("请先选中用户"));
         return;
     }
     if (userTable_->item(row, 6) && userTable_->item(row, 6)->text() == u8("注销")) {
-        QMessageBox::information(this, u8("提示"), u8("该账号已注销留档，不能再冻结或解冻"));
+        uiWarn(this, u8("提示"), u8("该账号已注销留档，不能再冻结或解冻"));
         return;
     }
     dispatch_->freezeUser(userTable_->item(row, 0)->text().toInt(), on);
     refresh();
 }
 
+/** UiSheet 表单新建站和桩。 */
 void MainWindow::addStation()
 {
-    QDialog dlg(this);
-    dlg.setWindowTitle(u8("新增电站"));
-    auto *form = new QFormLayout(&dlg);
+    UiSheet dlg(this, u8("新增电站"), u8("填写站名、地址与坐标后会按电桩数自动生成空闲桩。"));
+    dlg.polish(600, 640);
     auto *name = new QLineEdit;
+    name->setPlaceholderText(u8("例如：学院路充电站"));
     auto *addr = new QLineEdit;
+    addr->setPlaceholderText(u8("详细地址，便于用户端导航"));
     auto *lng = new QLineEdit("116.35");
     auto *lat = new QLineEdit("39.96");
     auto *n = new QSpinBox;
     n->setRange(1, 20);
     n->setValue(4);
-    form->addRow(u8("站名"), name);
-    form->addRow(u8("地址"), addr);
-    form->addRow(u8("经度"), lng);
-    form->addRow(u8("纬度"), lat);
-    form->addRow(u8("电桩数"), n);
-    auto *box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    form->addRow(box);
-    connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    auto *price = new QDoubleSpinBox;
+    price->setRange(0.10, 20.00);
+    price->setDecimals(2);
+    price->setValue(1.30);
+    price->setSuffix(u8(" 元/kWh"));
+    uiAddField(dlg.body(), u8("站名"), name);
+    uiAddField(dlg.body(), u8("地址"), addr);
+    auto *coord = new QHBoxLayout;
+    coord->setSpacing(14);
+    auto *lngBox = new QVBoxLayout;
+    lngBox->setSpacing(8);
+    lngBox->addWidget(uiFieldLabel(u8("经度")));
+    lngBox->addWidget(lng);
+    auto *latBox = new QVBoxLayout;
+    latBox->setSpacing(8);
+    latBox->addWidget(uiFieldLabel(u8("纬度")));
+    latBox->addWidget(lat);
+    coord->addLayout(lngBox, 1);
+    coord->addLayout(latBox, 1);
+    dlg.body()->addLayout(coord);
+    auto *meta = new QHBoxLayout;
+    meta->setSpacing(14);
+    auto *priceBox = new QVBoxLayout;
+    priceBox->setSpacing(8);
+    priceBox->addWidget(uiFieldLabel(u8("电价")));
+    priceBox->addWidget(price);
+    auto *nBox = new QVBoxLayout;
+    nBox->setSpacing(8);
+    nBox->addWidget(uiFieldLabel(u8("电桩数")));
+    nBox->addWidget(n);
+    meta->addLayout(priceBox, 1);
+    meta->addLayout(nBox, 1);
+    dlg.body()->addLayout(meta);
+    dlg.body()->addStretch(1);
+    dlg.addCancel();
+    dlg.addOk(u8("创建电站"));
     if (dlg.exec() != QDialog::Accepted)
         return;
     QVariantMap data;
@@ -675,18 +765,124 @@ void MainWindow::addStation()
     data["lng"] = lng->text().toDouble();
     data["lat"] = lat->text().toDouble();
     data["pileCount"] = n->value();
-    data["pricePerKwh"] = 1.30;
+    data["pricePerKwh"] = price->value();
     dispatch_->addStation(data);
     refresh();
 }
 
-void MainWindow::genForecast()
+/** 用选中站填表单后 updateStation。 */
+void MainWindow::editStation()
 {
-    const int n = dispatch_->refreshForecast();
-    QMessageBox::information(this, u8("智能分析"), u8("已更新 %1 条窗口预测，并重算高峰、故障风险与调度建议").arg(n));
+    const int row = stationTable_->currentRow();
+    if (row < 0) {
+        uiInfo(this, u8("提示"), u8("请先选中电站"));
+        return;
+    }
+    UiSheet dlg(this, u8("修改电站"), u8("保存后立即生效，不影响正在充电的订单金额口径。"));
+    dlg.polish(600, 600);
+    auto *name = new QLineEdit(stationTable_->item(row, 1)->text());
+    auto *addr = new QLineEdit(stationTable_->item(row, 2)->text());
+    const QStringList ll = stationTable_->item(row, 3)->text().split(QLatin1Char(','));
+    auto *lng = new QLineEdit(ll.value(0));
+    auto *lat = new QLineEdit(ll.value(1));
+    auto *price = new QDoubleSpinBox;
+    price->setRange(0.10, 20.00);
+    price->setDecimals(2);
+    price->setValue(stationTable_->item(row, 4)->text().toDouble());
+    price->setSuffix(u8(" 元/kWh"));
+    uiAddField(dlg.body(), u8("站名"), name);
+    uiAddField(dlg.body(), u8("地址"), addr);
+    auto *coord = new QHBoxLayout;
+    coord->setSpacing(14);
+    auto *lngBox = new QVBoxLayout;
+    lngBox->setSpacing(8);
+    lngBox->addWidget(uiFieldLabel(u8("经度")));
+    lngBox->addWidget(lng);
+    auto *latBox = new QVBoxLayout;
+    latBox->setSpacing(8);
+    latBox->addWidget(uiFieldLabel(u8("纬度")));
+    latBox->addWidget(lat);
+    coord->addLayout(lngBox, 1);
+    coord->addLayout(latBox, 1);
+    dlg.body()->addLayout(coord);
+    uiAddField(dlg.body(), u8("电价"), price);
+    dlg.body()->addStretch(1);
+    dlg.addCancel();
+    dlg.addOk(u8("保存修改"));
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    QVariantMap data;
+    data["name"] = name->text();
+    data["address"] = addr->text();
+    data["lng"] = lng->text().toDouble();
+    data["lat"] = lat->text().toDouble();
+    data["pricePerKwh"] = price->value();
+    uiInfo(this, u8("修改电站"),
+           dispatch_->updateStation(stationTable_->item(row, 0)->text().toInt(), data));
     refresh();
 }
 
+/** 选中站写入默认谷平峰。 */
+void MainWindow::enableTariff()
+{
+    const int row = stationTable_->currentRow();
+    if (row < 0) {
+        uiInfo(this, u8("提示"), u8("请先选中电站"));
+        return;
+    }
+    uiInfo(this, u8("分时电价"),
+           dispatch_->applyDefaultTariff(stationTable_->item(row, 0)->text().toInt()));
+    refresh();
+}
+
+/** 采纳调度建议表当前行。 */
+void MainWindow::adoptPlan()
+{
+    const int row = planTable_->currentRow();
+    if (row < 0) {
+        uiInfo(this, u8("提示"), u8("请先在调度建议表里选中一行"));
+        return;
+    }
+    const int id = planTable_->item(row, 0)->data(Qt::UserRole).toInt();
+    uiInfo(this, u8("采纳调度"), dispatch_->adoptDispatchPlan(id));
+    refresh();
+}
+
+/** 强制结束选中订单充电。 */
+void MainWindow::forceStop()
+{
+    const int row = orderTable_->currentRow();
+    if (row < 0) {
+        uiInfo(this, u8("提示"), u8("请先选中订单"));
+        return;
+    }
+    const int id = orderTable_->item(row, 0)->data(Qt::UserRole).toInt();
+    uiInfo(this, u8("强制结束"), dispatch_->forceStopOrder(id));
+    refresh();
+}
+
+/** 代结算选中订单。 */
+void MainWindow::forceSettle()
+{
+    const int row = orderTable_->currentRow();
+    if (row < 0) {
+        uiInfo(this, u8("提示"), u8("请先选中订单"));
+        return;
+    }
+    const int id = orderTable_->item(row, 0)->data(Qt::UserRole).toInt();
+    uiInfo(this, u8("代结算"), dispatch_->forceSettleOrder(id));
+    refresh();
+}
+
+/** 重算分析表再刷新界面。 */
+void MainWindow::genForecast()
+{
+    const int n = dispatch_->refreshForecast();
+    uiInfo(this, u8("智能分析"), u8("已更新 %1 条窗口预测，并重算高峰、故障风险与调度建议").arg(n));
+    refresh();
+}
+
+/** 启动只读 Flask 大屏并用浏览器打开。 */
 void MainWindow::openDash()
 {
     const QString appDir = QCoreApplication::applicationDirPath();

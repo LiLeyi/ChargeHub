@@ -1,6 +1,9 @@
 /**
  * @file dispatch.cpp
- * @brief 全部业务规则：用户端协议与管理端同进程调用都走这里
+ * @brief Dispatch 实现。头文件写清职责与调用关系；这里是具体校验和 SQL。
+ *
+ * 读代码顺序建议：handle → startCharge / stopCharge / settle → calcLive。
+ * 金额 fenOf/moneyFen 保证接口仍是元。详见 docs/模块与协作说明.md
  */
 #include "dispatch.h"
 
@@ -9,6 +12,7 @@
 #include <QCryptographicHash>
 #include <QDate>
 #include <QDateTime>
+#include <QTime>
 #include <QHash>
 #include <QImage>
 #include <QIODevice>
@@ -21,11 +25,13 @@
 #include <QUuid>
 #include <QtMath>
 
+/** 中国大陆手机号：1 开头，第二位 3–9。 */
 static QRegularExpression phoneRe()
 {
     return QRegularExpression(QStringLiteral("^1[3-9][0-9]{9}$"));
 }
 
+/** 按星级和关键词做简易情感分析，只写评价表，不改订单。 */
 static QJsonObject analyzeReview(int score, const QString &text)
 {
     const QStringList pos = {QString::fromUtf8("快"), QString::fromUtf8("稳"), QString::fromUtf8("方便"),
@@ -67,6 +73,7 @@ static QString dumpDoc(const QJsonObject &o)
     return QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
 }
 
+/** 头像压到 256px JPEG，便于 BLOB 入库。 */
 static QByteArray jpegAvatar(const QByteArray &raw, QString *err)
 {
     QImage img;
@@ -92,7 +99,11 @@ static QByteArray jpegAvatar(const QByteArray &raw, QString *err)
     return out;
 }
 
-static double money(double v) { return qRound(v * 100.0) / 100.0; }
+static qint64 fenOf(double yuan) { return qRound(yuan * 100.0); }
+
+static double money(double v) { return fenOf(v) / 100.0; }
+
+static double moneyFen(qint64 fen) { return fen / 100.0; }
 
 static QString nowStr()
 {
@@ -167,50 +178,151 @@ static GeoHit resolveAddress(const QString &raw, const QVector<QVariantMap> &sta
     return best;
 }
 
-Dispatch::Dispatch(Database *db) : db_(db) {}
+Dispatch::Dispatch(Database *db) : db_(db)
+{
+    loadSessions();
+}
 
+/** 统一成功信封，不写库。 */
 QJsonObject Dispatch::ok(const QString &type, int seq, const QString &msg, const QJsonObject &data) const
 {
     return QJsonObject{{"type", type}, {"seq", seq}, {"code", 0}, {"message", msg}, {"data", data}};
 }
 
+/** 统一失败信封，不写库。 */
 QJsonObject Dispatch::fail(const QString &type, int seq, int code, const QString &msg) const
 {
     return QJsonObject{{"type", type}, {"seq", seq}, {"code", code}, {"message", msg}, {"data", QJsonObject()}};
 }
 
+/** 启动时把 session 表里 30 分钟内的 token 读回内存。 */
+void Dispatch::loadSessions()
+{
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    for (const auto &row : db_->query("SELECT token, user_id, updated_at FROM session")) {
+        const QDateTime at = QDateTime::fromString(row.value("updated_at").toString(), "yyyy-MM-dd HH:mm:ss");
+        if (!at.isValid() || at.secsTo(QDateTime::currentDateTime()) > 30 * 60) {
+            db_->execute("DELETE FROM session WHERE token=?", {row.value("token")});
+            continue;
+        }
+        const QString token = row.value("token").toString();
+        tokenUser_.insert(token, row.value("user_id").toInt());
+        tokenAt_.insert(token, at.toSecsSinceEpoch());
+        tokenDbAt_.insert(token, now);
+    }
+}
+
+/** 插入或更新 session 行，管理端重启后还能认。 */
+void Dispatch::persistSession(const QString &token, int userId) const
+{
+    db_->execute("INSERT OR REPLACE INTO session(token,user_id,updated_at) VALUES(?,?,?)",
+                 {token, userId, nowStr()});
+}
+
+/** 删除 session 表中这一枚 token。 */
+void Dispatch::forgetSession(const QString &token) const
+{
+    db_->execute("DELETE FROM session WHERE token=?", {token});
+}
+
+/** 随机 token 记内存并落库，TTL 30 分钟。 */
 QString Dispatch::issueToken(int userId)
 {
     const QString token = QUuid::createUuid().toString().remove('{').remove('}').remove('-');
-    QMutexLocker locker(&sessionMutex_);
-    tokenUser_.insert(token, userId);
-    tokenAt_.insert(token, QDateTime::currentSecsSinceEpoch());
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    {
+        QMutexLocker locker(&sessionMutex_);
+        tokenUser_.insert(token, userId);
+        tokenAt_.insert(token, now);
+        tokenDbAt_.insert(token, now);
+    }
+    persistSession(token, userId);
     return token;
 }
 
+/** 内存查找；过期则删表并返回 0。 */
 int Dispatch::userIdByToken(const QString &token) const
 {
-    QMutexLocker locker(&sessionMutex_);
-    if (!tokenUser_.contains(token))
+    if (token.isEmpty())
         return 0;
-    if (QDateTime::currentSecsSinceEpoch() - tokenAt_.value(token) > 30 * 60) {
-        tokenUser_.remove(token);
-        tokenAt_.remove(token);
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    int uid = 0;
+    bool needLoad = false;
+    bool expired = false;
+    bool persist = false;
+    {
+        QMutexLocker locker(&sessionMutex_);
+        if (!tokenUser_.contains(token))
+            needLoad = true;
+        else if (now - tokenAt_.value(token) > 30 * 60)
+            expired = true;
+        else {
+            tokenAt_.insert(token, now);
+            uid = tokenUser_.value(token);
+            if (now - tokenDbAt_.value(token) >= 300) {
+                tokenDbAt_.insert(token, now);
+                persist = true;
+            }
+        }
+    }
+    if (needLoad) {
+        const auto row = db_->one("SELECT user_id, updated_at FROM session WHERE token=?", {token});
+        if (row.isEmpty())
+            return 0;
+        const QDateTime at = QDateTime::fromString(row.value("updated_at").toString(), "yyyy-MM-dd HH:mm:ss");
+        if (!at.isValid() || at.secsTo(QDateTime::currentDateTime()) > 30 * 60) {
+            forgetSession(token);
+            return 0;
+        }
+        uid = row.value("user_id").toInt();
+        QMutexLocker locker(&sessionMutex_);
+        tokenUser_.insert(token, uid);
+        tokenAt_.insert(token, now);
+        tokenDbAt_.insert(token, now);
+        return uid;
+    }
+    if (expired) {
+        {
+            QMutexLocker locker(&sessionMutex_);
+            tokenUser_.remove(token);
+            tokenAt_.remove(token);
+            tokenDbAt_.remove(token);
+        }
+        forgetSession(token);
         return 0;
     }
-    tokenAt_.insert(token, QDateTime::currentSecsSinceEpoch());
-    return tokenUser_.value(token);
+    if (persist)
+        persistSession(token, uid);
+    return uid;
 }
 
+/** 给 TcpServer 用的对外封装，无效为 0。 */
+int Dispatch::userIdOfToken(const QString &token) const
+{
+    return userIdByToken(token);
+}
+
+/** 冻结/注销：清掉该用户全部 token。 */
 void Dispatch::dropUser(int userId)
 {
-    QMutexLocker locker(&sessionMutex_);
-    const auto keys = tokenUser_.keys();
-    for (const QString &k : keys)
-        if (tokenUser_.value(k) == userId)
-            tokenUser_.remove(k);
+    QStringList tokens;
+    {
+        QMutexLocker locker(&sessionMutex_);
+        const auto keys = tokenUser_.keys();
+        for (const QString &k : keys) {
+            if (tokenUser_.value(k) == userId) {
+                tokens.append(k);
+                tokenUser_.remove(k);
+                tokenAt_.remove(k);
+                tokenDbAt_.remove(k);
+            }
+        }
+    }
+    for (const QString &k : tokens)
+        forgetSession(k);
 }
 
+/** token 有效且账号正常才返回用户行，否则 *err 说明原因。 */
 QVariantMap Dispatch::requireUser(const QString &token, QString *err) const
 {
     const int uid = userIdByToken(token);
@@ -234,6 +346,7 @@ QVariantMap Dispatch::requireUser(const QString &token, QString *err) const
     return u;
 }
 
+/** 回给用户端的公开字段，不含密码哈希。 */
 QJsonObject Dispatch::publicUser(const QVariantMap &u) const
 {
     QJsonObject o{
@@ -260,11 +373,24 @@ QJsonObject Dispatch::publicUser(const QVariantMap &u) const
     return o;
 }
 
+/** 按 type 分发；写操作 8 秒内相同 token+type+seq 直接回上次结果。 */
+/** 用户端总入口：幂等缓存 → 登录/注册或鉴权 → 分发到具体业务。 */
 QJsonObject Dispatch::handle(const QJsonObject &req)
 {
     const QString type = req.value("type").toString();
     const int seq = req.value("seq").toInt();
     const QJsonObject data = req.value("data").toObject();
+    const QString idemKey = req.value("token").toString() + QLatin1Char('|') + type + QLatin1Char('|')
+        + QString::number(seq);
+    const bool mutating = (type == "START_CHARGE" || type == "STOP_CHARGE" || type == "SETTLE_ORDER"
+                           || type == "RECHARGE" || type == "RESERVE_PILE" || type == "CANCEL_RESERVE");
+    if (mutating && !req.value("token").toString().isEmpty()) {
+        QMutexLocker locker(&idemMutex_);
+        const auto it = idemCache_.constFind(idemKey);
+        if (it != idemCache_.cend()
+            && QDateTime::currentSecsSinceEpoch() - it.value().first < 8)
+            return it.value().second;
+    }
     if (type == "LOGIN") {
         const QString phone = data.value("phone").toString().trimmed();
         const QString pwd = data.value("password").toString();
@@ -391,9 +517,24 @@ QJsonObject Dispatch::handle(const QJsonObject &req)
     }
     body.remove("error");
     body.remove("errorCode");
-    return ok(type, seq, message, body);
+    const QJsonObject resp = ok(type, seq, message, body);
+    if (mutating && !req.value("token").toString().isEmpty()) {
+        QMutexLocker locker(&idemMutex_);
+        idemCache_.insert(idemKey, {QDateTime::currentSecsSinceEpoch(), resp});
+        if (idemCache_.size() > 200) {
+            const qint64 cut = QDateTime::currentSecsSinceEpoch() - 8;
+            for (auto it = idemCache_.begin(); it != idemCache_.end(); ) {
+                if (it.value().first < cut)
+                    it = idemCache_.erase(it);
+                else
+                    ++it;
+            }
+        }
+    }
+    return resp;
 }
 
+/** 改昵称和/或头像（JPEG BLOB）；clearAvatar 则删 user_avatar。 */
 QJsonObject Dispatch::updateProfile(const QVariantMap &user, const QJsonObject &data)
 {
     const int uid = user.value("id").toInt();
@@ -437,24 +578,34 @@ QJsonObject Dispatch::updateProfile(const QVariantMap &user, const QJsonObject &
     return QJsonObject{{"user", publicUser(u)}};
 }
 
+/** 模拟充值，单笔 ≤ 10000 元，内部按分入账。 */
+/** 事务：加余额 + 写 recharge_log。单笔不超过 10000 元。 */
 QJsonObject Dispatch::recharge(const QVariantMap &user, const QJsonObject &data)
 {
     bool ok = false;
     const double amount = data.value("amount").toVariant().toDouble(&ok);
     if (!ok || amount <= 0 || amount > 10000)
         return QJsonObject{{"error", QString::fromUtf8("单笔充值须大于 0 且不超过 10000 元")}};
-    const double nb = money(user.value("balance").toDouble() + amount);
+    const double add = money(amount);
     const QString t = nowStr();
-    db_->execute("UPDATE user SET balance=? WHERE id=?", {nb, user.value("id")});
-    db_->execute("INSERT INTO recharge_log(user_id,amount,result,created_at) VALUES(?,?,?,?)",
-                 {user.value("id"), money(amount), QString::fromUtf8("成功"), t});
-    const auto last = db_->one("SELECT id FROM recharge_log WHERE user_id=? ORDER BY id DESC LIMIT 1",
-                               {user.value("id")});
-    const QString tradeNo = QString("RC%1").arg(last.value("id").toInt(), 8, 10, QChar('0'));
+    int logId = 0;
+    if (!db_->transaction([&] {
+            const auto fresh = db_->one("SELECT balance FROM user WHERE id=?", {user.value("id")});
+            const double nb = moneyFen(fenOf(fresh.value("balance").toDouble()) + fenOf(add));
+            if (db_->execute("UPDATE user SET balance=? WHERE id=?", {nb, user.value("id")}) < 0)
+                return false;
+            logId = db_->execute("INSERT INTO recharge_log(user_id,amount,result,created_at) VALUES(?,?,?,?)",
+                                 {user.value("id"), add, QString::fromUtf8("成功"), t});
+            return logId > 0;
+        })) {
+        return QJsonObject{{"error", QString::fromUtf8("充值未写入，请重试")}};
+    }
+    const QString tradeNo = QString("RC%1").arg(logId, 8, 10, QChar('0'));
     auto u = db_->one("SELECT * FROM user WHERE id=?", {user.value("id")});
-    return QJsonObject{{"user", publicUser(u)}, {"tradeNo", tradeNo}, {"amount", money(amount)}};
+    return QJsonObject{{"user", publicUser(u)}, {"tradeNo", tradeNo}, {"amount", add}};
 }
 
+/** 按地址关键字或半径列附近电站，只读 station。 */
 QJsonObject Dispatch::queryStations(const QVariantMap &user, const QJsonObject &data)
 {
     expireReservations();
@@ -576,6 +727,7 @@ QJsonObject Dispatch::queryStations(const QVariantMap &user, const QJsonObject &
     };
 }
 
+/** 账号标注销、作废 token；历史订单留下，手机号不能再注册。 */
 QJsonObject Dispatch::closeAccount(const QVariantMap &user)
 {
     const int uid = user.value("id").toInt();
@@ -596,6 +748,7 @@ QJsonObject Dispatch::closeAccount(const QVariantMap &user)
     return QJsonObject{{"closed", true}, {"userId", uid}};
 }
 
+/** 先过期预约，再列出某站的桩及是否可预约/可开充。 */
 QJsonObject Dispatch::queryPiles(const QVariantMap &user, const QJsonObject &data)
 {
     expireReservations();
@@ -668,6 +821,7 @@ QJsonObject Dispatch::queryPiles(const QVariantMap &user, const QJsonObject &dat
     };
 }
 
+/** 该用户充电中或待结算的那一单；没有则空。 */
 QVariantMap Dispatch::openOrder(int userId) const
 {
     return db_->one(
@@ -675,24 +829,68 @@ QVariantMap Dispatch::openOrder(int userId) const
         {userId});
 }
 
+/** 按小时切段：电量=功率×时长，费用用分累计后再换成元。 */
 QJsonObject Dispatch::calcLive(const QVariantMap &order, const QVariantMap &pile, const QVariantMap &station) const
 {
     const QDateTime start = QDateTime::fromString(order.value("start_time").toString(), "yyyy-MM-dd HH:mm:ss");
     QDateTime end = QDateTime::currentDateTime();
     if (order.value("status").toString() != QString::fromUtf8("充电中") && !order.value("end_time").toString().isEmpty())
         end = QDateTime::fromString(order.value("end_time").toString(), "yyyy-MM-dd HH:mm:ss");
-    const int seconds = qMax(0, int(start.secsTo(end)));
-    const double energy = qRound(pile.value("power_kw").toDouble() * (seconds / 3600.0) * 1000) / 1000.0;
-    const double amount = money(energy * station.value("price_per_kwh").toDouble());
+    const int seconds = qMax(0, start.isValid() && end.isValid() ? int(start.secsTo(end)) : 0);
+    const double power = pile.value("power_kw").toDouble();
+    const double fallback = station.value("price_per_kwh").toDouble();
+    const auto rules = db_->query(
+        "SELECT start_hour, end_hour, price_per_kwh, label FROM tariff_rule WHERE station_id=? ORDER BY start_hour",
+        {station.value("id")});
+    auto priceAt = [&](int hour) {
+        hour = qBound(0, hour, 23);
+        for (const auto &r : rules) {
+            if (hour >= r.value("start_hour").toInt() && hour < r.value("end_hour").toInt())
+                return r.value("price_per_kwh").toDouble();
+        }
+        return fallback;
+    };
+    auto labelAt = [&](int hour) {
+        hour = qBound(0, hour, 23);
+        for (const auto &r : rules) {
+            if (hour >= r.value("start_hour").toInt() && hour < r.value("end_hour").toInt())
+                return r.value("label").toString();
+        }
+        return QString();
+    };
+    double energy = 0;
+    qint64 fen = 0;
+    if (start.isValid() && end.isValid() && end > start) {
+        QDateTime cursor = start;
+        while (cursor < end) {
+            QDateTime hourEnd(cursor.date(), QTime(cursor.time().hour(), 0, 0));
+            hourEnd = hourEnd.addSecs(3600);
+            if (hourEnd > end)
+                hourEnd = end;
+            const int secs = qMax(0, int(cursor.secsTo(hourEnd)));
+            const double e = power * (secs / 3600.0);
+            energy += e;
+            fen += fenOf(e * priceAt(cursor.time().hour()));
+            cursor = hourEnd;
+        }
+    }
+    energy = qRound(energy * 1000) / 1000.0;
+    const double amount = moneyFen(fen);
+    const int nowH = QDateTime::currentDateTime().time().hour();
+    const double current = priceAt(nowH);
+    const double shown = energy > 1e-9 ? money(amount / energy) : current;
     return QJsonObject{
         {"seconds", seconds},
         {"energyKwh", energy},
         {"amount", amount},
-        {"powerKw", pile.value("power_kw").toDouble()},
-        {"pricePerKwh", station.value("price_per_kwh").toDouble()},
+        {"powerKw", power},
+        {"pricePerKwh", shown},
+        {"currentPrice", current},
+        {"tariffLabel", labelAt(nowH)},
     };
 }
 
+/** 旧订单字段原样保留，再并上 calcLive 的电量、金额、分时标签。 */
 QJsonObject Dispatch::publicOrder(const QVariantMap &o, const QVariantMap &p, const QVariantMap &s, const QJsonObject &live) const
 {
     QJsonObject r{
@@ -710,6 +908,7 @@ QJsonObject Dispatch::publicOrder(const QVariantMap &o, const QVariantMap &p, co
     return r;
 }
 
+/** 一用户一笔未完成订单、一桩同时只能充一单；成功后桩改「在用」。 */
 QJsonObject Dispatch::startCharge(const QVariantMap &user, const QJsonObject &data)
 {
     expireReservations();
@@ -732,17 +931,40 @@ QJsonObject Dispatch::startCharge(const QVariantMap &user, const QJsonObject &da
     auto station = db_->one("SELECT * FROM station WHERE id=?", {pile.value("station_id")});
     const QString t = nowStr();
     const QString no = "CH" + QDateTime::currentDateTime().toString("yyyyMMddHHmmss") + QString::number(user.value("id").toInt());
-    const int oid = db_->execute(
-        "INSERT INTO charge_order(order_no,user_id,pile_id,status,start_time,energy_kwh,amount,created_at) VALUES(?,?,?,?,?,?,?,?)",
-        {no, user.value("id"), pileId, QString::fromUtf8("充电中"), t, 0, 0, t});
-    db_->execute("UPDATE pile SET status=? WHERE id=?", {QString::fromUtf8("在用"), pileId});
-    if (!res.isEmpty())
-        db_->execute("UPDATE reservation SET status=? WHERE id=?", {QString::fromUtf8("已履约"), res.value("id")});
+    int oid = 0;
+    if (!db_->transaction([&] {
+            if (!openOrder(user.value("id").toInt()).isEmpty())
+                return false;
+            auto livePile = db_->one("SELECT * FROM pile WHERE id=?", {pileId});
+            if (livePile.isEmpty() || livePile.value("status").toString() != QString::fromUtf8("闲置"))
+                return false;
+            oid = db_->execute(
+                "INSERT INTO charge_order(order_no,user_id,pile_id,status,start_time,energy_kwh,amount,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                {no, user.value("id"), pileId, QString::fromUtf8("充电中"), t, 0, 0, t});
+            if (oid <= 0)
+                return false;
+            if (db_->execute("UPDATE pile SET status=?, last_seen_at=? WHERE id=?",
+                             {QString::fromUtf8("在用"), t, pileId})
+                < 0)
+                return false;
+            if (!res.isEmpty()
+                && db_->execute("UPDATE reservation SET status=? WHERE id=?",
+                                {QString::fromUtf8("已履约"), res.value("id")})
+                    < 0)
+                return false;
+            return true;
+        })) {
+        return QJsonObject{{"errorCode", 409},
+                           {"error", QString::fromUtf8("开充未成功，请确认没有未完成订单且电桩空闲")}};
+    }
     auto order = db_->one("SELECT * FROM charge_order WHERE id=?", {oid});
+    pile = db_->one("SELECT * FROM pile WHERE id=?", {pileId});
     return QJsonObject{{"order", publicOrder(order, pile, station, calcLive(order, pile, station))}};
 }
 
-QJsonObject Dispatch::chargeStatus(const QVariantMap &user)
+/** 未完成单 + calcLive；无单则 order 为 null。 */
+QJsonObject Dispatch::chargeStatus(const QVariantMap &user) const
 {
     auto order = openOrder(user.value("id").toInt());
     if (order.isEmpty())
@@ -752,6 +974,8 @@ QJsonObject Dispatch::chargeStatus(const QVariantMap &user)
     return QJsonObject{{"order", publicOrder(order, pile, station, calcLive(order, pile, station))}};
 }
 
+/** 充电中 → 待结算，写下电量费用，桩改闲置。 */
+/** 充电中→待结算，calcLive 落库，桩回闲置。 */
 QJsonObject Dispatch::stopCharge(const QVariantMap &user)
 {
     auto order = db_->one(
@@ -763,16 +987,28 @@ QJsonObject Dispatch::stopCharge(const QVariantMap &user)
     auto station = db_->one("SELECT * FROM station WHERE id=?", {pile.value("station_id")});
     auto live = calcLive(order, pile, station);
     const int minutes = qMax(1, live.value("seconds").toInt() / 60);
-    db_->execute("UPDATE charge_order SET status=?, end_time=?, energy_kwh=?, amount=? WHERE id=?",
-                 {QString::fromUtf8("待结算"), nowStr(), live.value("energyKwh").toDouble(),
-                  live.value("amount").toDouble(), order.value("id")});
-    db_->execute(
-        "UPDATE pile SET status=?, total_charge_count=total_charge_count+1, total_charge_minutes=total_charge_minutes+? WHERE id=?",
-        {QString::fromUtf8("闲置"), minutes, pile.value("id")});
+    const QString t = nowStr();
+    if (!db_->transaction([&] {
+            if (db_->execute("UPDATE charge_order SET status=?, end_time=?, energy_kwh=?, amount=? WHERE id=?",
+                             {QString::fromUtf8("待结算"), t, live.value("energyKwh").toDouble(),
+                              live.value("amount").toDouble(), order.value("id")})
+                < 0)
+                return false;
+            return db_->execute(
+                       "UPDATE pile SET status=?, total_charge_count=total_charge_count+1, "
+                       "total_charge_minutes=total_charge_minutes+?, last_seen_at=? WHERE id=?",
+                       {QString::fromUtf8("闲置"), minutes, t, pile.value("id")})
+                >= 0;
+        })) {
+        return QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("结束充电未写入，请重试")}};
+    }
     order = db_->one("SELECT * FROM charge_order WHERE id=?", {order.value("id")});
+    pile = db_->one("SELECT * FROM pile WHERE id=?", {pile.value("id")});
     return QJsonObject{{"order", publicOrder(order, pile, station, calcLive(order, pile, station))}};
 }
 
+/** 待结算订单扣余额（按分），桩改闲置。 */
+/** 待结算按分扣余额，订单改为已完成。 */
 QJsonObject Dispatch::settle(const QVariantMap &userIn)
 {
     auto order = db_->one(
@@ -781,11 +1017,21 @@ QJsonObject Dispatch::settle(const QVariantMap &userIn)
     if (order.isEmpty())
         return QJsonObject{{"errorCode", 404}, {"error", QString::fromUtf8("没有待结算订单")}};
     auto user = db_->one("SELECT * FROM user WHERE id=?", {userIn.value("id")});
-    if (user.value("balance").toDouble() + 1e-6 < order.value("amount").toDouble())
+    if (fenOf(user.value("balance").toDouble()) < fenOf(order.value("amount").toDouble()))
         return QJsonObject{{"errorCode", 402}, {"error", QString::fromUtf8("余额不足，请先充值后再结算")}};
-    const double nb = money(user.value("balance").toDouble() - order.value("amount").toDouble());
-    db_->execute("UPDATE user SET balance=? WHERE id=?", {nb, user.value("id")});
-    db_->execute("UPDATE charge_order SET status=? WHERE id=?", {QString::fromUtf8("已完成"), order.value("id")});
+    if (!db_->transaction([&] {
+            auto fresh = db_->one("SELECT balance FROM user WHERE id=?", {user.value("id")});
+            if (fenOf(fresh.value("balance").toDouble()) < fenOf(order.value("amount").toDouble()))
+                return false;
+            const qint64 nb = fenOf(fresh.value("balance").toDouble()) - fenOf(order.value("amount").toDouble());
+            if (db_->execute("UPDATE user SET balance=? WHERE id=?", {moneyFen(nb), user.value("id")}) < 0)
+                return false;
+            return db_->execute("UPDATE charge_order SET status=? WHERE id=?",
+                                {QString::fromUtf8("已完成"), order.value("id")})
+                >= 0;
+        })) {
+        return QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("结算未写入，请重试")}};
+    }
     user = db_->one("SELECT * FROM user WHERE id=?", {user.value("id")});
     auto pile = db_->one("SELECT * FROM pile WHERE id=?", {order.value("pile_id")});
     auto station = db_->one("SELECT * FROM station WHERE id=?", {pile.value("station_id")});
@@ -793,6 +1039,7 @@ QJsonObject Dispatch::settle(const QVariantMap &userIn)
     return QJsonObject{{"order", publicOrder(order, pile, station, live)}, {"user", publicUser(user)}};
 }
 
+/** 只查 admin 表，SHA256 比对；失败文案统一「账号或密码错误」。 */
 QJsonObject Dispatch::adminLogin(const QString &user, const QString &pwd)
 {
     const QByteArray hash = QCryptographicHash::hash(pwd.toUtf8(), QCryptographicHash::Sha256).toHex();
@@ -802,6 +1049,7 @@ QJsonObject Dispatch::adminLogin(const QString &user, const QString &pwd)
     return QJsonObject{{"ok", true}, {"username", user}};
 }
 
+/** 写入 admin；用户名 3~16 位字母开头。 */
 QJsonObject Dispatch::adminRegister(const QString &user, const QString &pwd)
 {
     if (!QRegularExpression(QStringLiteral("^[A-Za-z][A-Za-z0-9_]{2,15}$")).match(user).hasMatch())
@@ -816,6 +1064,7 @@ QJsonObject Dispatch::adminRegister(const QString &user, const QString &pwd)
     return QJsonObject{{"ok", true}, {"username", user}, {"registered", true}};
 }
 
+/** 今日/本月/累计营收与电量，给 KPI 和折线。 */
 QJsonObject Dispatch::salesSummary() const
 {
     const QString today = QDate::currentDate().toString("yyyy-MM-dd");
@@ -837,6 +1086,7 @@ QJsonObject Dispatch::salesSummary() const
     };
 }
 
+/** 闲置/在用/故障计数，给饼图。 */
 QJsonObject Dispatch::pileStatusStats() const
 {
     const auto rows = db_->query("SELECT status, COUNT(*) AS n FROM pile GROUP BY status");
@@ -863,11 +1113,13 @@ QJsonObject Dispatch::pileStatusStats() const
     return QJsonObject{{"total", total}, {"items", items}};
 }
 
+/** 全部电桩含站名。 */
 QVector<QVariantMap> Dispatch::listPiles() const
 {
     return db_->query("SELECT p.*, s.name AS station_name FROM pile p JOIN station s ON s.id=p.station_id ORDER BY p.pile_no");
 }
 
+/** 全部电站。 */
 QVector<QVariantMap> Dispatch::listStations() const
 {
     auto stations = db_->query("SELECT * FROM station ORDER BY id");
@@ -885,6 +1137,7 @@ QVector<QVariantMap> Dispatch::listStations() const
     return out;
 }
 
+/** 按手机号或昵称检索用户。 */
 QVector<QVariantMap> Dispatch::listUsers(const QString &keyword) const
 {
     const QString sql = QStringLiteral(
@@ -896,6 +1149,7 @@ QVector<QVariantMap> Dispatch::listUsers(const QString &keyword) const
     return db_->query(sql.arg(QStringLiteral("WHERE u.phone LIKE ?")), {"%" + keyword + "%"});
 }
 
+/** 故障桩改回闲置，写审计「远程重启」。 */
 QString Dispatch::rebootPile(int pileId)
 {
     auto pile = db_->one("SELECT * FROM pile WHERE id=?", {pileId});
@@ -913,6 +1167,7 @@ QString Dispatch::rebootPile(int pileId)
     return msg;
 }
 
+/** 冻结则 dropUser；注销账号不能再改状态。 */
 void Dispatch::freezeUser(int userId, bool freeze)
 {
     auto u = db_->one("SELECT * FROM user WHERE id=?", {userId});
@@ -935,36 +1190,213 @@ void Dispatch::freezeUser(int userId, bool freeze)
     }
 }
 
+/** 插 station，再按 pileCount 生成闲置桩。 */
 int Dispatch::addStation(const QVariantMap &data)
 {
     const QString name = data.value("name").toString().trimmed();
     const QString address = data.value("address").toString().trimmed();
-    const int sid = db_->execute(
-        "INSERT INTO station(name,address,lng,lat,price_per_kwh) VALUES(?,?,?,?,?)",
-        {name, address, data.value("lng"), data.value("lat"), data.value("pricePerKwh", 1.3)});
-    const int n = data.value("pileCount", 4).toInt();
-    for (int i = 1; i <= n; ++i) {
-        const bool fast = i <= qMax(1, n / 2);
-        db_->execute("INSERT INTO pile(pile_no,station_id,type,power_kw,status) VALUES(?,?,?,?,?)",
-                     {QString("ST%1-P%2").arg(sid, 2, 10, QChar('0')).arg(i, 2, 10, QChar('0')),
-                      sid, fast ? QString::fromUtf8("快充") : QString::fromUtf8("慢充"),
-                      fast ? 60.0 : 7.0, QString::fromUtf8("闲置")});
-    }
+    int sid = 0;
+    const int n = qBound(1, data.value("pileCount", 4).toInt(), 20);
+    db_->transaction([&] {
+        sid = db_->execute(
+            "INSERT INTO station(name,address,lng,lat,price_per_kwh) VALUES(?,?,?,?,?)",
+            {name, address, data.value("lng"), data.value("lat"), data.value("pricePerKwh", 1.3)});
+        if (sid <= 0)
+            return false;
+        for (int i = 1; i <= n; ++i) {
+            const bool fast = i <= qMax(1, n / 2);
+            if (db_->execute("INSERT INTO pile(pile_no,station_id,type,power_kw,status) VALUES(?,?,?,?,?)",
+                             {QString("ST%1-P%2").arg(sid, 2, 10, QChar('0')).arg(i, 2, 10, QChar('0')),
+                              sid, fast ? QString::fromUtf8("快充") : QString::fromUtf8("慢充"),
+                              fast ? 60.0 : 7.0, QString::fromUtf8("闲置")})
+                <= 0)
+                return false;
+        }
+        return true;
+    });
+    if (sid > 0)
+        applyDefaultTariff(sid);
     return sid;
 }
 
+/** 谷 0–7/22–24、平 7–17、峰 17–22，系数乘站点标价。 */
+/** 写入谷 0–7/22–24、平 7–17、峰 17–22。 */
+QString Dispatch::applyDefaultTariff(int stationId)
+{
+    auto st = db_->one("SELECT * FROM station WHERE id=?", {stationId});
+    if (st.isEmpty())
+        return QString::fromUtf8("电站不存在");
+    const double base = st.value("price_per_kwh").toDouble();
+    const double valley = money(base * 0.85);
+    const double peak = money(base * 1.25);
+    db_->transaction([&] {
+        if (db_->execute("DELETE FROM tariff_rule WHERE station_id=?", {stationId}) < 0)
+            return false;
+        const struct { int a, b; double p; const char *lab; } rows[] = {
+            {0, 7, valley, "谷"}, {7, 17, base, "平"}, {17, 22, peak, "峰"}, {22, 24, valley, "谷"},
+        };
+        for (const auto &r : rows) {
+            if (db_->execute("INSERT INTO tariff_rule(station_id,start_hour,end_hour,price_per_kwh,label) VALUES(?,?,?,?,?)",
+                             {stationId, r.a, r.b, r.p, QString::fromUtf8(r.lab)})
+                <= 0)
+                return false;
+        }
+        return true;
+    });
+    db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
+                 {"admin", QString::fromUtf8("启用分时电价"), st.value("name"),
+                  QString::fromUtf8("谷/平/峰"), nowStr()});
+    return QString::fromUtf8("已按基准电价启用谷 0.85 / 平 1.0 / 峰 1.25");
+}
+
+/** 采纳建议：保证有默认分时，再把该站峰价上浮并标 adopted。 */
+QString Dispatch::adoptDispatchPlan(int planId)
+{
+    auto plan = db_->one("SELECT * FROM dispatch_plan WHERE id=?", {planId});
+    if (plan.isEmpty())
+        return QString::fromUtf8("没有这条调度建议");
+    auto st = db_->one("SELECT * FROM station WHERE name=?", {plan.value("station")});
+    if (st.isEmpty())
+        return QString::fromUtf8("对不上电站名，请先刷新分析");
+    applyDefaultTariff(st.value("id").toInt());
+    const double peak = money(st.value("price_per_kwh").toDouble() * 1.35);
+    db_->execute("UPDATE tariff_rule SET price_per_kwh=? WHERE station_id=? AND label=?",
+                 {peak, st.value("id"), QString::fromUtf8("峰")});
+    db_->execute("UPDATE dispatch_plan SET adopted=1, adopted_at=? WHERE id=?", {nowStr(), planId});
+    db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
+                 {"admin", QString::fromUtf8("采纳调度"), plan.value("station"),
+                  QString::fromUtf8("峰段上浮"), nowStr()});
+    return QString::fromUtf8("已采纳：该站峰时段电价上浮，引导错峰");
+}
+
+/** 推送用：等价于该用户的 chargeStatus。 */
+QJsonObject Dispatch::chargePushFor(int userId) const
+{
+    auto user = db_->one("SELECT * FROM user WHERE id=?", {userId});
+    if (user.isEmpty())
+        return {};
+    return chargeStatus(user);
+}
+
+/** 闲置桩标故障；充电中须先强制结束。 */
+QString Dispatch::markPileFault(int pileId)
+{
+    auto pile = db_->one("SELECT * FROM pile WHERE id=?", {pileId});
+    if (pile.isEmpty())
+        return QString::fromUtf8("电桩不存在");
+    if (pile.value("status").toString() == QString::fromUtf8("在用"))
+        return QString::fromUtf8("充电中的电桩请先强制结束订单，再标故障");
+    const QString t = nowStr();
+    db_->execute("UPDATE pile SET status=?, fault_code=?, fault_at=? WHERE id=?",
+                 {QString::fromUtf8("故障"), QString::fromUtf8("ADMIN"), t, pileId});
+    db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
+                 {"admin", QString::fromUtf8("标记故障"), pile.value("pile_no"), QString::fromUtf8("成功"), t});
+    return QString::fromUtf8("已标记为故障，用户端不可再开充");
+}
+
+/** 与 rebootPile 相同：故障→闲置。 */
+QString Dispatch::restorePile(int pileId)
+{
+    return rebootPile(pileId);
+}
+
+/** 改站名/地址/经纬/基准电价，写审计。 */
+QString Dispatch::updateStation(int stationId, const QVariantMap &data)
+{
+    auto st = db_->one("SELECT * FROM station WHERE id=?", {stationId});
+    if (st.isEmpty())
+        return QString::fromUtf8("电站不存在");
+    const QString name = data.value("name").toString().trimmed();
+    const QString address = data.value("address").toString().trimmed();
+    const double price = data.value("pricePerKwh").toDouble();
+    if (name.isEmpty() || address.isEmpty() || price <= 0)
+        return QString::fromUtf8("站名、地址不能空，电价须大于 0");
+    db_->execute("UPDATE station SET name=?, address=?, lng=?, lat=?, price_per_kwh=? WHERE id=?",
+                 {name, address, data.value("lng", st.value("lng")), data.value("lat", st.value("lat")),
+                  money(price), stationId});
+    db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
+                 {"admin", QString::fromUtf8("修改电站"), name, QString::fromUtf8("成功"), nowStr()});
+    return QString::fromUtf8("电站已更新");
+}
+
+/** 运营指定订单走 stopCharge，并写审计。 */
+QString Dispatch::forceStopOrder(int orderId)
+{
+    auto order = db_->one("SELECT * FROM charge_order WHERE id=?", {orderId});
+    if (order.isEmpty())
+        return QString::fromUtf8("订单不存在");
+    if (order.value("status").toString() != QString::fromUtf8("充电中"))
+        return QString::fromUtf8("只有充电中的订单可以强制结束");
+    auto user = db_->one("SELECT * FROM user WHERE id=?", {order.value("user_id")});
+    const auto r = stopCharge(user);
+    if (r.contains("error"))
+        return r.value("error").toString();
+    db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
+                 {"admin", QString::fromUtf8("强制结束充电"), order.value("order_no"),
+                  QString::fromUtf8("待结算"), nowStr()});
+    return QString::fromUtf8("已强制结束，订单进入待结算");
+}
+
+/** 充电中则先强制停，再 settle 扣款，写审计。 */
+QString Dispatch::forceSettleOrder(int orderId)
+{
+    auto order = db_->one("SELECT * FROM charge_order WHERE id=?", {orderId});
+    if (order.isEmpty())
+        return QString::fromUtf8("订单不存在");
+    auto user = db_->one("SELECT * FROM user WHERE id=?", {order.value("user_id")});
+    if (order.value("status").toString() == QString::fromUtf8("充电中")) {
+        const QString stopMsg = forceStopOrder(orderId);
+        if (!stopMsg.contains(QString::fromUtf8("待结算")))
+            return stopMsg;
+    }
+    const auto r = settle(user);
+    if (r.contains("error"))
+        return r.value("error").toString();
+    db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
+                 {"admin", QString::fromUtf8("代结算"), order.value("order_no"), QString::fromUtf8("已完成"),
+                  nowStr()});
+    return QString::fromUtf8("已代结算并扣款");
+}
+
+/** 最近若干条 audit_log，最多 200。 */
+QVector<QVariantMap> Dispatch::listAudit(int limit) const
+{
+    return db_->query("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", {qBound(1, limit, 200)});
+}
+
+/** 断线超时：对该用户充电中订单走 stopCharge，审计写「断线释放」。 */
+void Dispatch::releaseStaleSession(int userId)
+{
+    auto user = db_->one("SELECT * FROM user WHERE id=?", {userId});
+    if (user.isEmpty())
+        return;
+    auto order = db_->one(
+        "SELECT * FROM charge_order WHERE user_id=? AND status='充电中' ORDER BY id DESC LIMIT 1", {userId});
+    if (order.isEmpty())
+        return;
+    const auto r = stopCharge(user);
+    if (!r.contains("error")) {
+        db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
+                     {"system", QString::fromUtf8("断线释放"), order.value("order_no"),
+                      QString::fromUtf8("待结算"), nowStr()});
+    }
+}
+
+/** 过期仍「有效」的预约改为已取消并标 no_show。 */
 void Dispatch::expireReservations() const
 {
-    db_->execute("UPDATE reservation SET status=? WHERE status=? AND expire_at < ?",
+    db_->execute("UPDATE reservation SET status=?, no_show=1 WHERE status=? AND expire_at < ?",
                  {QString::fromUtf8("已取消"), QString::fromUtf8("有效"), nowStr()});
 }
 
+/** 该桩当前仍有效的预约；没有则空。 */
 QVariantMap Dispatch::activeReserve(int pileId) const
 {
     return db_->one(
         "SELECT * FROM reservation WHERE pile_id=? AND status='有效' ORDER BY id DESC LIMIT 1", {pileId});
 }
 
+/** 闲置且没有任何有效预约。 */
 bool Dispatch::pileIsIdle(const QVariantMap &pile) const
 {
     if (pile.value("status").toString() != QString::fromUtf8("闲置"))
@@ -972,6 +1404,7 @@ bool Dispatch::pileIsIdle(const QVariantMap &pile) const
     return activeReserve(pile.value("id").toInt()).isEmpty();
 }
 
+/** 当前用户全部订单，带 publicOrder 字段。 */
 QJsonObject Dispatch::listOrders(const QVariantMap &user)
 {
     const auto rows = db_->query(
@@ -999,6 +1432,7 @@ QJsonObject Dispatch::listOrders(const QVariantMap &user)
     return QJsonObject{{"orders", arr}};
 }
 
+/** 当前用户充值流水。 */
 QJsonObject Dispatch::listRecharge(const QVariantMap &user)
 {
     const auto rows = db_->query(
@@ -1017,6 +1451,7 @@ QJsonObject Dispatch::listRecharge(const QVariantMap &user)
     return QJsonObject{{"records", arr}, {"balance", money(user.value("balance").toDouble())}};
 }
 
+/** 先过期处理，再返回该用户预约。 */
 QJsonObject Dispatch::listReservations(const QVariantMap &user)
 {
     expireReservations();
@@ -1059,6 +1494,7 @@ QJsonObject Dispatch::listReservations(const QVariantMap &user)
     return QJsonObject{{"reservations", arr}};
 }
 
+/** 闲置且无他人预约才插入 reservation(有效)。 */
 QJsonObject Dispatch::reservePile(const QVariantMap &user, const QJsonObject &data)
 {
     expireReservations();
@@ -1080,6 +1516,7 @@ QJsonObject Dispatch::reservePile(const QVariantMap &user, const QJsonObject &da
     return QJsonObject{{"reservation", QJsonObject{{"id", rid}, {"pileId", pileId}, {"expireAt", expire}}}};
 }
 
+/** 取消本人当前有效预约。 */
 QJsonObject Dispatch::cancelReserve(const QVariantMap &user)
 {
     auto row = db_->one("SELECT * FROM reservation WHERE user_id=? AND status='有效' ORDER BY id DESC LIMIT 1",
@@ -1090,6 +1527,7 @@ QJsonObject Dispatch::cancelReserve(const QVariantMap &user)
     return QJsonObject{};
 }
 
+/** 必须有文字；写 station_review 并浅层情感写入 review_doc。 */
 QJsonObject Dispatch::reviewStation(const QVariantMap &user, const QJsonObject &data)
 {
     const int sid = data.value("stationId").toInt();
@@ -1146,6 +1584,7 @@ QJsonObject Dispatch::reviewStation(const QVariantMap &user, const QJsonObject &
     return QJsonObject{{"updated", false}, {"nlp", nlp}};
 }
 
+/** 某桩评价列表、均分和情感摘要。 */
 QJsonObject Dispatch::listPileReviews(const QVariantMap &user, const QJsonObject &data)
 {
     const int pileId = data.value("pileId").toInt();
@@ -1250,6 +1689,7 @@ QJsonObject Dispatch::listPileReviews(const QVariantMap &user, const QJsonObject
     };
 }
 
+/** 运营侧评价情感汇总。 */
 QVector<QVariantMap> Dispatch::listReviewNlp() const
 {
     struct Agg {
@@ -1309,6 +1749,7 @@ QVector<QVariantMap> Dispatch::listReviewNlp() const
     return out;
 }
 
+/** 营收 + 桩状态 + 最近分析报告，一次给驾驶舱。 */
 QJsonObject Dispatch::cockpit() const
 {
     QJsonObject s = salesSummary();
@@ -1331,6 +1772,7 @@ QJsonObject Dispatch::cockpit() const
     return s;
 }
 
+/** 读 load_forecast。 */
 QVector<QVariantMap> Dispatch::listForecasts() const
 {
     return db_->query(
@@ -1338,6 +1780,7 @@ QVector<QVariantMap> Dispatch::listForecasts() const
         "ORDER BY f.station_id, f.horizon_hours");
 }
 
+/** 读 hourly_load。 */
 QVector<QVariantMap> Dispatch::listHourlyLoad() const
 {
     return db_->query(
@@ -1345,21 +1788,25 @@ QVector<QVariantMap> Dispatch::listHourlyLoad() const
         "JOIN station s ON s.id=h.station_id ORDER BY s.id, h.hour");
 }
 
+/** 读 fault_risk。 */
 QVector<QVariantMap> Dispatch::listFaultRisks() const
 {
     return db_->query("SELECT * FROM fault_risk ORDER BY score DESC");
 }
 
+/** 读 analysis_alert。 */
 QVector<QVariantMap> Dispatch::listAlerts() const
 {
     return db_->query("SELECT * FROM analysis_alert ORDER BY id DESC LIMIT 20");
 }
 
+/** 读 dispatch_plan（含是否已采纳）。 */
 QVector<QVariantMap> Dispatch::listDispatchPlan() const
 {
     return db_->query("SELECT * FROM dispatch_plan ORDER BY priority");
 }
 
+/** 运营侧按单号/手机/桩号筛订单。 */
 QVector<QVariantMap> Dispatch::listAdminOrders(const QString &keyword) const
 {
     if (keyword.isEmpty())
@@ -1375,11 +1822,13 @@ QVector<QVariantMap> Dispatch::listAdminOrders(const QString &keyword) const
         {"%" + keyword + "%", "%" + keyword + "%"});
 }
 
+/** 最近一行 analysis_report。 */
 QVariantMap Dispatch::latestReport() const
 {
     return db_->one("SELECT * FROM analysis_report ORDER BY id DESC LIMIT 1");
 }
 
+/** 清空分析表后按已完成订单重算预测、风险、告警、调度建议。不改账。 */
 int Dispatch::refreshForecast()
 {
     const QString t = nowStr();

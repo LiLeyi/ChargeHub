@@ -1,12 +1,13 @@
 /**
  * @file protocol.cpp
- * @brief 组包 / 拆包，粘包时按长度切帧
+ * @brief 长度前缀帧的编解码。pack 给发送端；append/tryDecode 给接收端。
  */
 #include "protocol.h"
 
 #include <QJsonDocument>
 #include <QtEndian>
 
+/** 大端 4 字节长度 + UTF-8 JSON。 */
 QByteArray Protocol::pack(const QJsonObject &obj)
 {
     const QByteArray body = QJsonDocument(obj).toJson(QJsonDocument::Compact);
@@ -17,12 +18,14 @@ QByteArray Protocol::pack(const QJsonObject &obj)
     return out;
 }
 
+/** 接到缓冲末尾再拆。半包留着等下次。 */
 void Protocol::append(const QByteArray &chunk)
 {
     buf_.append(chunk);
     tryDecode();
 }
 
+/** 取出已拆好的下一张 JSON；队列空则返回空对象。 */
 QJsonObject Protocol::nextPacket()
 {
     if (ready_.isEmpty())
@@ -30,12 +33,13 @@ QJsonObject Protocol::nextPacket()
     return ready_.takeFirst();
 }
 
+/** 长度非法或超过 1MB 则丢弃缓冲，防止坏帧拖死拆包。 */
 void Protocol::tryDecode()
 {
     while (buf_.size() >= 4) {
         const quint32 len = qFromBigEndian<quint32>(
             reinterpret_cast<const uchar *>(buf_.constData()));
-        if (len == 0 || len > 8 * 1024 * 1024) {
+        if (len == 0 || len > 1024 * 1024) {
             buf_.clear();
             return;
         }

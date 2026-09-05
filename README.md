@@ -162,7 +162,7 @@ bash /mnt/hgfs/ChargeHub/scripts/start.sh
 6. **大屏**  
    浏览器 `http://127.0.0.1:5000`，营收/订单数应跟着刚才的结算变（刷新即可）。
 7. **管理端操作**  
-   试：冻结某个 **自己新注册的号**（不要冻演示号）、加电站、看智能分析。用户端用被冻号应无法登录。
+   试：冻结某个 **自己新注册的号**（不要冻演示号）、加电站或改电价、选中电站点「启用分时电价」、把闲置桩标故障再「远程重启 / 恢复」、在「订单跟踪」对卡住的单点强制结束 / 代结算、智能分析里「采纳选中调度建议」、打开「操作审计」。用户端用被冻号应无法登录。充电中把用户端关掉，约 60 秒后该桩应回到闲置，订单变待结算。充电中度数/金额除轮询外，服务端大约每 5 秒还会推一次 `PUSH_CHARGE`。
 8. **注销（用新号）**  
    再注册一个手机号，用该号测「注销账号」。注销后不能再登录、不能再用同一手机号注册。**不要用 13800138000 测这一条。**
 
@@ -404,9 +404,9 @@ cd ~/ChargeHub-Linux/user && ./run.sh
 | `common/protocol.*` | 4 字节长度 + JSON 拆包组包 | `Protocol::pack` / `append` / `nextPacket` | 改帧格式必须用户端、管理端一起改 |
 | `userclient/src/client.*` | TCP 客户端 | `connectTo(ip,8888)` `request(type,data,token)` | 只加请求，禁止 `QSqlDatabase` |
 | `userclient/src/userwindow.*` | 用户界面 | 按钮 → `Client::request` | 界面与交互 |
-| `adminserver/src/tcpserver.*` | 听 8888、多用户连接 | 内部调用 `Dispatch::handle` | 一般不用改 |
-| `adminserver/src/dispatch.*` | **全部业务规则** | `handle`（用户端）；`adminLogin` / `freezeUser` 等（GUI） | 加功能优先改这里 |
-| `adminserver/src/database.*` | SQLite 唯一写入口 | `query` / `one` / `execute` | 改表要同步 `schema.sql` |
+| `adminserver/src/tcpserver.*` | 听 8888、多用户连接；断线 60s 释放桩 | 内部调用 `Dispatch::handle` / `releaseStaleSession` | 会话与超时 |
+| `adminserver/src/dispatch.*` | **全部业务规则** | `handle`（用户端）；`adminLogin` / `freezeUser` / `markPileFault` / `forceStopOrder` 等（GUI） | 加功能优先改这里 |
+| `adminserver/src/database.*` | SQLite 唯一写入口 | `query` / `one` / `execute` / `transaction` | 改表要同步 `schema.sql` |
 | `adminserver/src/mainwindow.*` | 运营界面 | 直接调 Dispatch，不走 Socket | 后台页面 |
 | `adminserver/src/chartwidget.*` | 自绘图表 | `setPoints` / `setBars` / `setSlices` | 仅显示 |
 | `dashboard/app.py` | Flask 只读大屏 | `GET /` `GET /api/overview` `GET /api/analysis` | 图表页；禁止 UPDATE 订单 |

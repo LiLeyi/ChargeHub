@@ -3,10 +3,13 @@
 
 /**
  * @file mainwindow.h
- * @brief 运营管理端主窗口：电站、电桩、用户、订单、智能分析。
+ * @brief 运营桌面：电站 / 电桩 / 用户 / 订单 / 智能分析 / 审计。
  *
- * 与 TcpServer 同进程，直接调 Dispatch，不向 8888 再连一次。
- * 打开 Web 大屏只是启动 Flask 并打开浏览器，大屏自己只读 SQLite。
+ * 【职责】展示 Dispatch 查出来的表，把按钮转成 Dispatch 调用。
+ * 【原理】与 TcpServer 同进程，不连 8888。refresh() 定时拉 KPI 和表格。
+ *         弹窗用 UiSheet，只改外观，不改接口字段。
+ * 【协作】openDash() 只启动 Flask；大屏自己只读库，不经本窗口写单。
+ * 【详见】docs/模块与协作说明.md
  */
 #include "chartwidget.h"
 #include "dispatch.h"
@@ -25,14 +28,44 @@
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
+    /**
+     * 搭导航和各页表格、接按钮到下面这些槽。
+     * dispatch 必须已构造（且 TcpServer 已在听）。
+     */
     MainWindow(Dispatch *dispatch, QWidget *parent = nullptr);
+
 private slots:
+    /**
+     * 向 Dispatch 要营收、桩/站/用户/订单、预测、审计，填 KPI、表格和自绘图表。
+     * 定时器与手动操作成功后都会调用。
+     */
     void refresh();
+    /** 对电桩表当前行调用 Dispatch::rebootPile，成功再 refresh。 */
     void rebootPile();
+    /** 对选中桩 Dispatch::markPileFault（占用中会先停充）。 */
+    void markFault();
+    /** freeze=true 冻结，false 解冻。注销用户 Dispatch 会拒绝。 */
     void freeze(bool on);
+    /** UiSheet 表单：站名/地址/经纬/电价/桩数 → Dispatch::addStation。 */
     void addStation();
+    /** 用选中行填表单，Dispatch::updateStation。 */
+    void editStation();
+    /** 选中站写入默认谷平峰，Dispatch::applyDefaultTariff。 */
+    void enableTariff();
+    /** 调度建议表选中行，Dispatch::adoptDispatchPlan（峰价上浮）。 */
+    void adoptPlan();
+    /** 订单表选中行，Dispatch::forceStopOrder。 */
+    void forceStop();
+    /** 订单表选中行，Dispatch::forceSettleOrder。 */
+    void forceSettle();
+    /** Dispatch::refreshForecast 重算分析表，再 refresh 界面。 */
     void genForecast();
+    /**
+     * 启动 dashboard/app.py（只读 HTTP），再用浏览器打开。
+     * 本窗口不把数据推给大屏，大屏自己读同一份 SQLite。
+     */
     void openDash();
+
 private:
     Dispatch *dispatch_;
     QListWidget *nav_ = nullptr;
@@ -68,6 +101,7 @@ private:
     QTableWidget *alertTable_ = nullptr;
     QTableWidget *nlpTable_ = nullptr;
     QTableWidget *orderTable_ = nullptr;
+    QTableWidget *auditTable_ = nullptr;
     QLineEdit *userKw_ = nullptr;
     QLineEdit *orderKw_ = nullptr;
 };
