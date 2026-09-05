@@ -3,7 +3,7 @@
 
 /**
  * @file userwindow.h
- * @brief 充电用户端主界面：登录、找桩、充电、订单、个人中心。
+ * @brief 充电用户端主界面：登录、找桩、预约、充电、订单、个人中心。
  *
  * 所有按钮最终都走 Client::request。登录页「服务器地址」即管理端 IP:端口。
  * 本机自测填 127.0.0.1:8888；连组里服务器填那台电脑底栏的局域网 IP:8888。
@@ -49,6 +49,7 @@ private:
     void renderPiles(const QJsonObject &data);
     void renderOrders(const QJsonArray &arr);
     void renderRecharge(const QJsonArray &arr);
+    void renderReservations(const QJsonArray &arr);
     void renderPileReview(const QJsonObject &data);
     void showCharge(const QJsonObject &order);
     void tryStart(int pileId);
@@ -74,6 +75,7 @@ private:
     QWidget *buildOrders();
     QWidget *buildMe();
     QWidget *buildPileReview();
+    QWidget *buildReservations();
     static void clearBox(QLayout *lay);
 
     Client client_;
@@ -112,8 +114,10 @@ private:
     QLabel *pileMeta_ = nullptr;
     QVBoxLayout *pileBox_ = nullptr;
     QVBoxLayout *rechargeBox_ = nullptr;
+    QVBoxLayout *reservationBox_ = nullptr;
     QJsonObject lastPiles_;
     QJsonArray lastOrders_;
+    QJsonArray lastReservations_;
     QLabel *chStatus_ = nullptr;
     QLabel *chTime_ = nullptr;
     QLabel *chInfo_ = nullptr;

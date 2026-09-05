@@ -361,6 +361,8 @@ QJsonObject Dispatch::handle(const QJsonObject &req)
         body = listOrders(user);
     } else if (type == "LIST_RECHARGE") {
         body = listRecharge(user);
+    } else if (type == "LIST_RESERVATIONS") {
+        body = listReservations(user);
     } else if (type == "RESERVE_PILE") {
         body = reservePile(user, data);
         if (body.contains("errorCode"))
@@ -1013,6 +1015,48 @@ QJsonObject Dispatch::listRecharge(const QVariantMap &user)
         });
     }
     return QJsonObject{{"records", arr}, {"balance", money(user.value("balance").toDouble())}};
+}
+
+QJsonObject Dispatch::listReservations(const QVariantMap &user)
+{
+    expireReservations();
+    const auto rows = db_->query(
+        "SELECT r.id, r.pile_id, r.status, r.expire_at, r.created_at, "
+        "p.pile_no, p.type, p.power_kw, p.status AS pile_status, "
+        "s.id AS station_id, s.name AS station_name, s.address, s.lng, s.lat, s.price_per_kwh "
+        "FROM reservation r "
+        "JOIN pile p ON p.id=r.pile_id "
+        "JOIN station s ON s.id=p.station_id "
+        "WHERE r.user_id=? AND r.status='有效' "
+        "ORDER BY r.expire_at, r.id DESC",
+        {user.value("id")});
+
+    QJsonArray arr;
+    const QDateTime now = QDateTime::currentDateTime();
+    for (const auto &r : rows) {
+        const QDateTime expire =
+            QDateTime::fromString(r.value("expire_at").toString(), "yyyy-MM-dd HH:mm:ss");
+        const int remaining = expire.isValid() ? qMax(0, int(now.secsTo(expire))) : 0;
+        arr.append(QJsonObject{
+            {"id", r.value("id").toInt()},
+            {"pileId", r.value("pile_id").toInt()},
+            {"status", r.value("status").toString()},
+            {"expireAt", r.value("expire_at").toString()},
+            {"createdAt", r.value("created_at").toString()},
+            {"remainingSeconds", remaining},
+            {"pileNo", r.value("pile_no").toString()},
+            {"type", r.value("type").toString()},
+            {"powerKw", r.value("power_kw").toDouble()},
+            {"pileStatus", r.value("pile_status").toString()},
+            {"stationId", r.value("station_id").toInt()},
+            {"stationName", r.value("station_name").toString()},
+            {"address", r.value("address").toString()},
+            {"lng", r.value("lng").toDouble()},
+            {"lat", r.value("lat").toDouble()},
+            {"pricePerKwh", r.value("price_per_kwh").toDouble()},
+        });
+    }
+    return QJsonObject{{"reservations", arr}};
 }
 
 QJsonObject Dispatch::reservePile(const QVariantMap &user, const QJsonObject &data)

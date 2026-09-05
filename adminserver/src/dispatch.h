@@ -70,6 +70,7 @@ private:
     QJsonObject settle(const QVariantMap &user);
     QJsonObject listOrders(const QVariantMap &user);
     QJsonObject listRecharge(const QVariantMap &user);
+    QJsonObject listReservations(const QVariantMap &user);
     QJsonObject reservePile(const QVariantMap &user, const QJsonObject &data);
     QJsonObject cancelReserve(const QVariantMap &user);
     QJsonObject reviewStation(const QVariantMap &user, const QJsonObject &data);

@@ -39,6 +39,7 @@
 | SETTLE_ORDER | 是 | | 扣余额 |
 | LIST_ORDERS | 是 | | 我的订单 |
 | LIST_RECHARGE | 是 | | 充值记录 |
+| LIST_RESERVATIONS | 是 | | 当前用户尚未到期的预约 |
 | RESERVE_PILE | 是 | pileId | 预约 15 分钟 |
 | CANCEL_RESERVE | 是 | | 取消预约 |
 | REVIEW_STATION | 是 | stationId, pileId, score, comment | 评价 |

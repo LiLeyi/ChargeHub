@@ -245,7 +245,7 @@ QWidget *UserWindow::buildShell()
     sl->addSpacing(18);
     nav_ = new QListWidget;
     nav_->setObjectName("nav");
-    nav_->addItems({u8("附近电站"), u8("实时充电"), u8("我的订单"), u8("个人中心")});
+    nav_->addItems({u8("附近电站"), u8("已预约"), u8("实时充电"), u8("我的订单"), u8("个人中心")});
     nav_->setCurrentRow(0);
     nav_->setFocusPolicy(Qt::NoFocus);
     nav_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -253,8 +253,10 @@ QWidget *UserWindow::buildShell()
         if (row == 0)
             switchTab(0);
         else if (row == 1)
-            switchTab(2);
+            switchTab(6);
         else if (row == 2)
+            switchTab(2);
+        else if (row == 3)
             switchTab(3);
         else
             switchTab(4);
@@ -291,6 +293,7 @@ QWidget *UserWindow::buildShell()
     pages_->addWidget(buildOrders());
     pages_->addWidget(buildMe());
     pages_->addWidget(buildPileReview());
+    pages_->addWidget(buildReservations());
     cl->addWidget(top);
     cl->addWidget(pages_, 1);
     lay->addWidget(side);
@@ -305,12 +308,14 @@ void UserWindow::switchTab(int i)
         nav_->blockSignals(true);
         if (i == 0 || i == 1 || i == 5)
             nav_->setCurrentRow(0);
-        else if (i == 2)
+        else if (i == 6)
             nav_->setCurrentRow(1);
-        else if (i == 3)
+        else if (i == 2)
             nav_->setCurrentRow(2);
-        else if (i == 4)
+        else if (i == 3)
             nav_->setCurrentRow(3);
+        else if (i == 4)
+            nav_->setCurrentRow(4);
         nav_->blockSignals(false);
     }
     if (pageTitle_ && pageSub_) {
@@ -326,6 +331,9 @@ void UserWindow::switchTab(int i)
         } else if (i == 3) {
             pageTitle_->setText(u8("我的订单"));
             pageSub_->setText(u8("充电记录与待结算订单"));
+        } else if (i == 6) {
+            pageTitle_->setText(u8("已预约"));
+            pageSub_->setText(u8("集中查看尚未到期的充电桩预约"));
         } else if (i == 5) {
             pageTitle_->setText(u8("电桩评价"));
             pageSub_->setText(u8("查看与撰写这根桩的充电体验"));
@@ -344,6 +352,9 @@ void UserWindow::switchTab(int i)
             client_.request("LIST_ORDERS", {}, token_);
     } else if (i == 4) {
         refreshMe();
+    } else if (i == 6) {
+        if (!token_.isEmpty())
+            client_.request("LIST_RESERVATIONS", {}, token_);
     }
 }
 
@@ -628,6 +639,52 @@ QWidget *UserWindow::buildOrders()
     orderBox_ = new QVBoxLayout(inner);
     orderBox_->setContentsMargins(0, 0, 8, 0);
     orderBox_->setSpacing(10);
+    lay->addWidget(makeScroll(inner), 1);
+    return w;
+}
+
+QWidget *UserWindow::buildReservations()
+{
+    auto *w = new QWidget;
+    auto *lay = new QVBoxLayout(w);
+    lay->setContentsMargins(24, 18, 24, 16);
+    lay->setSpacing(12);
+
+    auto *bar = new QFrame;
+    bar->setObjectName("toolbar");
+    auto *row = new QHBoxLayout(bar);
+    row->setContentsMargins(16, 12, 16, 12);
+    row->setSpacing(10);
+    auto *titleCol = new QVBoxLayout;
+    titleCol->setContentsMargins(0, 0, 0, 0);
+    titleCol->setSpacing(2);
+    auto *title = new QLabel(u8("已预约充电桩"));
+    title->setObjectName("title");
+    auto *sub = new QLabel(u8("集中查看尚未到期的预约，避免在附近电站列表中反复查找"));
+    sub->setObjectName("muted");
+    sub->setWordWrap(true);
+    titleCol->addWidget(title);
+    titleCol->addWidget(sub);
+    auto *refresh = new QPushButton(u8("刷新"));
+    refresh->setObjectName("ghost");
+    refresh->setMaximumWidth(96);
+    connect(refresh, &QPushButton::clicked, this, [this] {
+        if (!token_.isEmpty())
+            client_.request("LIST_RESERVATIONS", {}, token_);
+    });
+    row->addLayout(titleCol, 1);
+    row->addWidget(refresh);
+    lay->addWidget(bar);
+
+    auto *hint = new QLabel(u8("预约默认保留 15 分钟；到期后会自动失效。如需充电，可直接从这里进入对应充电桩。"));
+    hint->setObjectName("muted");
+    hint->setWordWrap(true);
+    lay->addWidget(hint);
+
+    auto *inner = new QWidget;
+    reservationBox_ = new QVBoxLayout(inner);
+    reservationBox_->setContentsMargins(0, 0, 8, 0);
+    reservationBox_->setSpacing(10);
     lay->addWidget(makeScroll(inner), 1);
     return w;
 }
@@ -1304,6 +1361,100 @@ void UserWindow::renderRecharge(const QJsonArray &arr)
     rechargeBox_->addStretch();
 }
 
+void UserWindow::renderReservations(const QJsonArray &arr)
+{
+    if (!reservationBox_)
+        return;
+    lastReservations_ = arr;
+    clearBox(reservationBox_);
+    if (arr.isEmpty()) {
+        auto *empty = new QLabel(u8("当前没有有效预约，去附近电站选择一个充电桩吧。"));
+        empty->setObjectName("muted");
+        reservationBox_->addWidget(empty);
+        auto *find = new QPushButton(u8("去附近电站"));
+        find->setObjectName("ghost");
+        find->setMaximumWidth(140);
+        connect(find, &QPushButton::clicked, this, [this] { switchTab(0); });
+        reservationBox_->addWidget(find, 0, Qt::AlignLeft);
+        reservationBox_->addStretch();
+        return;
+    }
+
+    for (const auto &v : arr) {
+        const auto r = v.toObject();
+        auto *c = card();
+        auto *cl = new QVBoxLayout(c);
+        cl->setContentsMargins(16, 14, 16, 14);
+        cl->setSpacing(8);
+
+        auto *head = new QHBoxLayout;
+        auto *name = new QLabel(
+            r.value("stationName").toString() + "  ·  " + r.value("pileNo").toString());
+        name->setObjectName("cardTitle");
+        auto *status = new QLabel(u8("预约中"));
+        status->setObjectName("pillOk");
+        head->addWidget(name, 1);
+        head->addWidget(status, 0, Qt::AlignRight | Qt::AlignVCenter);
+        cl->addLayout(head);
+
+        const int remaining = r.value("remainingSeconds").toInt();
+        QString remainText;
+        if (remaining > 0) {
+            const int minutes = remaining / 60;
+            const int seconds = remaining % 60;
+            remainText = QString::fromUtf8("剩余 %1 分 %2 秒").arg(minutes).arg(seconds, 2, 10, QChar('0'));
+        } else {
+            remainText = u8("即将到期");
+        }
+        auto *detail = new QLabel(
+            QString::fromUtf8("%1\n%2  ·  %3  ·  %4 kW  ·  ¥%5 / 度\n预约到期：%6（%7）")
+                .arg(r.value("address").toString())
+                .arg(r.value("pileNo").toString())
+                .arg(r.value("type").toString())
+                .arg(r.value("powerKw").toDouble(), 0, 'f', 0)
+                .arg(r.value("pricePerKwh").toDouble(), 0, 'f', 2)
+                .arg(r.value("expireAt").toString(), remainText));
+        detail->setObjectName("muted");
+        detail->setWordWrap(true);
+        cl->addWidget(detail);
+
+        auto *actions = new QHBoxLayout;
+        auto *view = new QPushButton(u8("查看该站电桩"));
+        view->setObjectName("ghost");
+        view->setMaximumWidth(140);
+        const int stationId = r.value("stationId").toInt();
+        const int pileId = r.value("pileId").toInt();
+        connect(view, &QPushButton::clicked, this, [this, r, stationId] {
+            currentStation_ = QJsonObject{
+                {"id", stationId},
+                {"name", r.value("stationName").toString()},
+                {"address", r.value("address").toString()},
+                {"lng", r.value("lng").toDouble()},
+                {"lat", r.value("lat").toDouble()},
+                {"pricePerKwh", r.value("pricePerKwh").toDouble()},
+            };
+            client_.request("QUERY_PILES", QJsonObject{{"stationId", stationId}}, token_);
+        });
+        auto *start = new QPushButton(u8("立即开始充电"));
+        start->setMaximumWidth(140);
+        start->setEnabled(r.value("pileStatus").toString() == u8("闲置"));
+        connect(start, &QPushButton::clicked, this, [this, pileId] { tryStart(pileId); });
+        auto *cancel = new QPushButton(u8("取消预约"));
+        cancel->setObjectName("danger");
+        cancel->setMaximumWidth(120);
+        connect(cancel, &QPushButton::clicked, this, [this] {
+            client_.request("CANCEL_RESERVE", {}, token_);
+        });
+        actions->addWidget(view);
+        actions->addWidget(start);
+        actions->addWidget(cancel);
+        actions->addStretch();
+        cl->addLayout(actions);
+        reservationBox_->addWidget(c);
+    }
+    reservationBox_->addStretch();
+}
+
 void UserWindow::showCharge(const QJsonObject &order)
 {
     currentOrder_ = order;
@@ -1541,7 +1692,9 @@ void UserWindow::onResp(QJsonObject obj)
         renderPiles(data);
     } else if (type == "RESERVE_PILE" || type == "CANCEL_RESERVE") {
         QMessageBox::information(this, u8("ChargeHub"), obj.value("message").toString());
-        if (currentStation_.value("id").toInt() > 0)
+        if (pages_->currentIndex() == 6)
+            client_.request("LIST_RESERVATIONS", {}, token_);
+        else if (currentStation_.value("id").toInt() > 0)
             client_.request("QUERY_PILES", QJsonObject{{"stationId", currentStation_.value("id").toInt()}}, token_);
         else
             queryStations();
@@ -1604,6 +1757,8 @@ void UserWindow::onResp(QJsonObject obj)
         switchTab(3);
     } else if (type == "LIST_ORDERS") {
         renderOrders(data.value("orders").toArray());
+    } else if (type == "LIST_RESERVATIONS") {
+        renderReservations(data.value("reservations").toArray());
     } else if (type == "RECHARGE" || type == "UPDATE_PROFILE") {
         applyUser(data.value("user").toObject());
         if (type == "RECHARGE")
