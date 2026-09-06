@@ -44,7 +44,7 @@
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential qtbase5-dev qt5-qmake libqt5sql5-sqlite python3-flask
+sudo apt install -y build-essential qtbase5-dev qt5-qmake libqt5sql5-sqlite python3-flask python3-tk xdg-utils
 ```
 
 4. 再编译一次（会弹出窗口）：
@@ -82,68 +82,23 @@ sudo vmhgfs-fuse .host:/ /mnt/hgfs -o allow_other
 
 自己测时开自己的管理端完全没问题。测完若要参加联调，**先关掉**自己的管理端，再按第 4 节连组里服务器。
 
-### 2.1 打开三个程序（按顺序）
+### 2.1 打开管理端和用户端
 
-已经编过一次就不必再 `rebuild`。按 1 → 2 → 3：
-
-**① 管理端（必须最先开，不要关）**
-
-1. 打开「文件」→ 左边 **主目录** → `ChargeHub-Linux` → `admin`
-2. 双击 `run.sh`
-3. 账号 `admin`，密码 `123456`，登录
-4. 窗口能出来、最底下有字，就成功了（本机自测可以不看 IP）
-
-或终端：
+第一次先编一次（改代码后再编一次）：
 
 ```bash
-cd ~/ChargeHub-Linux/admin && ./run.sh
+bash scripts/rebuild.sh
 ```
 
-**② 用户端**
+之后只双击这两个文件：
 
-1. 再打开一个「文件」窗口 → `ChargeHub-Linux` → `user`，双击 `run.sh`
-2. 填写（不要改服务器这一栏）：
+| 文件 | 打开什么 | 登录 |
+|------|----------|------|
+| `ChargeHub/scripts/打开运营后台.bat` | 管理端 | `admin` / `123456` |
+| `ChargeHub/scripts/打开用户端.bat` | 用户端 | `13800138000` / `123456`，服务器 `127.0.0.1:8888` |
 
-   | 栏 | 填什么 |
-   |----|--------|
-   | 手机号 | `13800138000` |
-   | 密码 | `123456` |
-   | 服务器地址 | `127.0.0.1:8888` |
-
-3. 先点「连接」，提示连上后再点「登录」
-
-或终端：
-
-```bash
-cd ~/ChargeHub-Linux/user && ./run.sh
-```
-
-连不上：多半是管理端还没开，或服务器地址被改掉了。
-
-**③ 运营大屏（可选，看图表时再开）**
-
-浏览器地址栏输入：
-
-```
-http://127.0.0.1:5000
-```
-
-打不开时，另开一个终端（这个窗口要一直挂着）：
-
-```bash
-cd ~/ChargeHub-Linux/dashboard
-CHARGEHUB_DB=$HOME/ChargeHub-Linux/admin/data/chargehub.db python3 app.py
-```
-
-再刷新浏览器。
-
-三个一起拉起也可以：
-
-```bash
-bash /mnt/hgfs/ChargeHub/scripts/start.sh
-```
-
-然后仍按上面的账号登录；用户端服务器地址同样是 `127.0.0.1:8888`。
+用户端先点「连接」，连上后再点「登录」。  
+大屏：管理端里 **运营决策大屏** → **打开 Web 大屏**。
 
 ### 2.2 建议自测顺序（约 10 分钟）
 
@@ -162,7 +117,7 @@ bash /mnt/hgfs/ChargeHub/scripts/start.sh
 6. **大屏**  
    浏览器 `http://127.0.0.1:5000`，营收/订单数应跟着刚才的结算变（刷新即可）。
 7. **管理端操作**  
-   试：冻结某个 **自己新注册的号**（不要冻演示号）、加电站、看智能分析。用户端用被冻号应无法登录。
+   试：冻结某个 **自己新注册的号**（不要冻演示号）、加电站或改电价、选中电站点「启用分时电价」、把闲置桩标故障再「远程重启 / 恢复」、在「订单跟踪」对卡住的单点强制结束 / 代结算、智能分析里「采纳选中调度建议」、打开「操作审计」。用户端用被冻号应无法登录。充电中把用户端关掉，约 60 秒后该桩应回到闲置，订单变待结算。充电中度数/金额除轮询外，服务端大约每 5 秒还会推一次 `PUSH_CHARGE`。
 8. **注销（用新号）**  
    再注册一个手机号，用该号测「注销账号」。注销后不能再登录、不能再用同一手机号注册。**不要用 13800138000 测这一条。**
 
@@ -404,9 +359,9 @@ cd ~/ChargeHub-Linux/user && ./run.sh
 | `common/protocol.*` | 4 字节长度 + JSON 拆包组包 | `Protocol::pack` / `append` / `nextPacket` | 改帧格式必须用户端、管理端一起改 |
 | `userclient/src/client.*` | TCP 客户端 | `connectTo(ip,8888)` `request(type,data,token)` | 只加请求，禁止 `QSqlDatabase` |
 | `userclient/src/userwindow.*` | 用户界面 | 按钮 → `Client::request` | 界面与交互 |
-| `adminserver/src/tcpserver.*` | 听 8888、多用户连接 | 内部调用 `Dispatch::handle` | 一般不用改 |
-| `adminserver/src/dispatch.*` | **全部业务规则** | `handle`（用户端）；`adminLogin` / `freezeUser` 等（GUI） | 加功能优先改这里 |
-| `adminserver/src/database.*` | SQLite 唯一写入口 | `query` / `one` / `execute` | 改表要同步 `schema.sql` |
+| `adminserver/src/tcpserver.*` | 听 8888、多用户连接；断线 60s 释放桩 | 内部调用 `Dispatch::handle` / `releaseStaleSession` | 会话与超时 |
+| `adminserver/src/dispatch.*` | **全部业务规则** | `handle`（用户端）；`adminLogin` / `freezeUser` / `markPileFault` / `forceStopOrder` 等（GUI） | 加功能优先改这里 |
+| `adminserver/src/database.*` | SQLite 唯一写入口 | `query` / `one` / `execute` / `transaction` | 改表要同步 `schema.sql` |
 | `adminserver/src/mainwindow.*` | 运营界面 | 直接调 Dispatch，不走 Socket | 后台页面 |
 | `adminserver/src/chartwidget.*` | 自绘图表 | `setPoints` / `setBars` / `setSlices` | 仅显示 |
 | `dashboard/app.py` | Flask 只读大屏 | `GET /` `GET /api/overview` `GET /api/analysis` | 图表页；禁止 UPDATE 订单 |

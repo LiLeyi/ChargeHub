@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent
 
 
 def schemaFile() -> Path:
+    """权威表结构：database/schema.sql。"""
     return ROOT / "schema.sql"
 
 
@@ -32,6 +33,7 @@ STATIONS = [
 
 
 def connect(path: Path = DB_PATH) -> sqlite3.Connection:
+    """打开 SQLite，打开外键。本脚本会删旧文件再建，不要对联调库用。"""
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -39,6 +41,7 @@ def connect(path: Path = DB_PATH) -> sqlite3.Connection:
 
 
 def initDb(path: Path = DB_PATH, *, withHistory: bool = True) -> Path:
+    """按 schema.sql 重建库并灌演示站/桩/账号；withHistory 再造一批已完成单。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         path.unlink()

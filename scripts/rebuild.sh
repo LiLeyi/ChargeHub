@@ -74,6 +74,9 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 export LD_LIBRARY_PATH="$DIR/lib:${LD_LIBRARY_PATH}"
 export QT_PLUGIN_PATH="$DIR/plugins"
 export QT_QPA_PLATFORM=xcb
+mkdir -p "$HOME/.xdg-runtime"
+chmod 700 "$HOME/.xdg-runtime"
+export XDG_RUNTIME_DIR="$HOME/.xdg-runtime"
 cd "$DIR"
 exec "$DIR/adminserver"
 EOF
@@ -83,31 +86,14 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 export LD_LIBRARY_PATH="$DIR/lib:${LD_LIBRARY_PATH}"
 export QT_PLUGIN_PATH="$DIR/plugins"
 export QT_QPA_PLATFORM=xcb
+mkdir -p "$HOME/.xdg-runtime"
+chmod 700 "$HOME/.xdg-runtime"
+export XDG_RUNTIME_DIR="$HOME/.xdg-runtime"
 exec "$DIR/userclient"
 EOF
   chmod +x "$APP/admin/run.sh" "$APP/user/run.sh"
   cp -a "$DST/dashboard/." "$APP/dashboard/"
   chown -R "$TARGET_USER:$TARGET_USER" "$APP" "$DST" 2>/dev/null || true
-
-  ENV="XDG_RUNTIME_DIR=/run/user/$(id -u "$TARGET_USER") DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u "$TARGET_USER")/bus DISPLAY=${DISPLAY:-:0} WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0} QT_QPA_PLATFORM=xcb HOME=$TARGET_HOME LANG=zh_CN.UTF-8 XAUTHORITY=$TARGET_HOME/.Xauthority"
-  launch() {
-    if [ "$(id -u)" -eq 0 ]; then
-      sudo -u "$TARGET_USER" env $ENV "$@"
-    else
-      env DISPLAY="${DISPLAY:-:0}" QT_QPA_PLATFORM=xcb "$@"
-    fi
-  }
-  cd "$APP/admin"
-  launch nohup bash ./run.sh >/tmp/chargehub_admin.log 2>&1 &
-  sleep 2
-  cd "$APP/user"
-  launch nohup bash ./run.sh >/tmp/chargehub_user.log 2>&1 &
-  cd "$APP/dashboard"
-  launch env CHARGEHUB_DB="$APP/admin/data/chargehub.db" nohup python3 app.py >/tmp/chargehub_dash.log 2>&1 &
-  sleep 2
-  echo ---logs---
-  cat /tmp/chargehub_admin.log || true
-  cat /tmp/chargehub_user.log || true
-  cat /tmp/chargehub_dash.log || true
+  echo "编好了。Windows 上双击 scripts/打开运营后台.bat 和 scripts/打开用户端.bat"
   echo UI_OK
 } > "$LOG" 2>&1

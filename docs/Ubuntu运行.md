@@ -1,12 +1,14 @@
-# 在 Ubuntu 22.04 上运行 ChargeHub
+# 怎么打开 ChargeHub
 
-完整说明（含联调、网络基础、模块接口、数据库）见 **[README.md](../README.md)**。
+WSLg 若出现 `[WARN:COPY MODE]`，是 Windows 共享内存坏了，不是 ChargeHub 的问题。启动脚本会先挂上 `/mnt/shared_memory` 再开窗口。
 
-```bash
-sudo apt update
-sudo apt install -y build-essential qtbase5-dev qt5-qmake libqt5sql5-sqlite python3-flask
-bash /mnt/hgfs/ChargeHub/scripts/rebuild.sh    # 第一次或改代码后
-bash /mnt/hgfs/ChargeHub/scripts/start.sh      # 只打开、不编译
-```
+只保留两个文件，分别双击即可。
 
-本机用户端填 `127.0.0.1:8888`。连组里服务器填管理端窗口底栏的 `局域网IP:8888`，且其他人不要再开管理端。
+| 双击这个 | 打开什么 | 登录 |
+|----------|----------|------|
+| `ChargeHub/scripts/打开运营后台.bat` | 管理端 | `admin` / `123456` |
+| `ChargeHub/scripts/打开用户端.bat` | 用户端 | `13800138000` / `123456`，服务器 `127.0.0.1:8888`，先连接再登录 |
+
+大屏：管理端登录后，左边 **运营决策大屏** → **打开 Web 大屏**。
+
+改了代码：在 Ubuntu 里执行 `bash scripts/rebuild.sh`，再双击上面两个 bat。
