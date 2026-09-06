@@ -21,6 +21,7 @@ LineChart::LineChart(QWidget *parent) : QWidget(parent)
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 }
 
+/** 记下点与标题，触发重绘。 */
 void LineChart::setPoints(const QJsonArray &pts, const QString &title)
 {
     points_ = pts;
@@ -28,6 +29,7 @@ void LineChart::setPoints(const QJsonArray &pts, const QString &title)
     update();
 }
 
+/** 画折线、网格和标题；空数据画「暂无数据」。 */
 void LineChart::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
@@ -89,12 +91,14 @@ BarChart::BarChart(QWidget *parent) : QWidget(parent)
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 }
 
+/** 记下柱数据并重绘。 */
 void BarChart::setBars(const QJsonArray &bars)
 {
     bars_ = bars;
     update();
 }
 
+/** 按 name/value 画柱。 */
 void BarChart::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
@@ -128,12 +132,14 @@ PieChart::PieChart(QWidget *parent) : QWidget(parent)
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 }
 
+/** 记下扇区并重绘。 */
 void PieChart::setSlices(const QJsonArray &slices)
 {
     slices_ = slices;
     update();
 }
 
+/** 按总和算角度画饼。 */
 void PieChart::paintEvent(QPaintEvent *)
 {
     QPainter p(this);

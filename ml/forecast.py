@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""充电负荷预测：先做按小时统计基线，样本足够时再用线性回归。"""
+"""充电负荷预测。
+
+职责：写入 load_forecast 等分析表，给大屏和管理端智能分析页。
+原理：按电站+星期+小时聚合已完成订单；样本少用均值。
+协作：不改 charge_order / user.balance / pile.status。管理端 refreshForecast 也会重算一部分。
+"""
 from __future__ import annotations
 
 import sqlite3
@@ -17,6 +22,7 @@ if not DB.exists():
 
 
 def loadHourly(conn) -> dict:
+    """按电站、星期、小时聚合已完成订单电量。"""
     rows = conn.execute(
         "SELECT o.start_time, o.energy_kwh, p.station_id "
         "FROM charge_order o JOIN pile p ON p.id=o.pile_id "
@@ -30,6 +36,7 @@ def loadHourly(conn) -> dict:
 
 
 def predict(conn) -> None:
+    """写入 load_forecast；只动分析表。"""
     hourly = loadHourly(conn)
     stations = conn.execute("SELECT id, name FROM station").fetchall()
     pile_cnt = {
@@ -59,6 +66,7 @@ def predict(conn) -> None:
 
 
 def trySklearn(conn) -> bool:
+    """样本够且装了 sklearn 时拟合线性回归，只打印 r2，不改业务表。"""
     try:
         from sklearn.linear_model import LinearRegression
     except Exception:
@@ -80,6 +88,7 @@ def trySklearn(conn) -> bool:
 
 
 def main() -> None:
+    """打开库（没有则 initDb），尝试 sklearn，再 predict 写分析表。"""
     if not DB.exists():
         sys.path.insert(0, str(ROOT))
         from database.initdb import initDb
