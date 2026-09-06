@@ -21,14 +21,40 @@
 #include <QVariantMap>
 #include <QVector>
 
+#include <functional>
+
 class Database {
 public:
+    enum class ErrorKind {
+        None,
+        Busy,
+        Constraint,
+        Other,
+    };
+
+    struct WriteResult {
+        bool ok = false;
+        qint64 rowsAffected = 0;
+        qint64 insertId = 0;
+        ErrorKind errorKind = ErrorKind::Other;
+    };
+
+    struct QueryResult {
+        bool ok = false;
+        QVector<QVariantMap> rows;
+        ErrorKind errorKind = ErrorKind::Other;
+    };
+
     explicit Database(const QString &path);
     ~Database();
     bool open();
     QVector<QVariantMap> query(const QString &sql, const QVariantList &args = {});
     QVariantMap one(const QString &sql, const QVariantList &args = {});
     int execute(const QString &sql, const QVariantList &args = {});
+    QueryResult queryChecked(const QString &sql, const QVariantList &args = {});
+    WriteResult executeChecked(const QString &sql, const QVariantList &args = {});
+    bool runTransaction(const std::function<bool()> &operation,
+                        ErrorKind *errorKind = nullptr);
     QString path() const { return path_; }
 
 private:

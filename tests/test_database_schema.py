@@ -15,13 +15,17 @@ from database.initdb import initDb
 
 
 EXPECTED_INDEXES = {
+    "uq_reservation_active_pile": ("pile_id",),
+    "uq_reservation_active_user": ("user_id",),
+    "uq_order_open_user": ("user_id",),
+    "uq_order_charging_pile": ("pile_id",),
     "idx_order_user_status": ("user_id", "status"),
     "idx_order_user_id": ("user_id", "id"),
-    "idx_order_status": ("status",),
+    "idx_order_status_start": ("status", "start_time"),
     "idx_order_start": ("start_time",),
     "idx_pile_station": ("station_id",),
     "idx_pile_status": ("status",),
-    "idx_reservation_user_status": ("user_id", "status"),
+    "idx_reservation_user_status_expire_id": ("user_id", "status", "expire_at", "id"),
     "idx_reservation_pile_status": ("pile_id", "status"),
     "idx_reservation_status_expire": ("status", "expire_at"),
     "idx_station_review_station": ("station_id", "id"),
@@ -31,7 +35,12 @@ EXPECTED_INDEXES = {
     "idx_recharge_user_id": ("user_id", "id"),
 }
 
-LEGACY_INDEXES = ("idx_order_created_at", "idx_recharge_user_created")
+LEGACY_INDEXES = (
+    "idx_order_created_at",
+    "idx_recharge_user_created",
+    "idx_order_status",
+    "idx_reservation_user_status",
+)
 
 QUERY_PLANS = {
     "idx_order_user_id": (
@@ -59,6 +68,16 @@ QUERY_PLANS = {
     "idx_recharge_user_id": (
         "SELECT * FROM recharge_log WHERE user_id=? ORDER BY id DESC LIMIT 30",
         (1,),
+    ),
+    "idx_order_status_start": (
+        "SELECT IFNULL(SUM(amount),0) FROM charge_order "
+        "WHERE status='已完成' AND start_time>=? AND start_time<?",
+        ("2020-01-01 00:00:00", "2030-01-01 00:00:00"),
+    ),
+    "idx_reservation_user_status_expire_id": (
+        "SELECT * FROM reservation WHERE user_id=? AND status=? "
+        "ORDER BY expire_at, id DESC",
+        (1, "有效"),
     ),
 }
 
@@ -120,6 +139,10 @@ class DatabaseSchemaTest(unittest.TestCase):
             connection.execute("CREATE INDEX idx_order_created_at ON charge_order(created_at)")
             connection.execute(
                 "CREATE INDEX idx_recharge_user_created ON recharge_log(user_id, created_at DESC)"
+            )
+            connection.execute("CREATE INDEX idx_order_status ON charge_order(status)")
+            connection.execute(
+                "CREATE INDEX idx_reservation_user_status ON reservation(user_id, status)"
             )
             connection.executescript(schema)
             indexes = {

@@ -94,6 +94,30 @@ static QByteArray jpegAvatar(const QByteArray &raw, QString *err)
 
 static double money(double v) { return qRound(v * 100.0) / 100.0; }
 
+static int databaseErrorCode(Database::ErrorKind kind)
+{
+    if (kind == Database::ErrorKind::Busy)
+        return 503;
+    if (kind == Database::ErrorKind::Constraint)
+        return 409;
+    return 500;
+}
+
+static QString databaseErrorMessage(Database::ErrorKind kind)
+{
+    if (kind == Database::ErrorKind::Busy)
+        return QString::fromUtf8("数据库繁忙，请稍后重试");
+    if (kind == Database::ErrorKind::Constraint)
+        return QString::fromUtf8("数据状态已变化，请刷新后重试");
+    return QString::fromUtf8("数据库操作失败，请稍后重试");
+}
+
+static QJsonObject databaseFailure(Database::ErrorKind kind)
+{
+    return QJsonObject{{"errorCode", databaseErrorCode(kind)},
+                       {"error", databaseErrorMessage(kind)}};
+}
+
 static QString nowStr()
 {
     return QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
@@ -301,11 +325,21 @@ QJsonObject Dispatch::handle(const QJsonObject &req)
         const QString hash = QString::fromLatin1(
             QCryptographicHash::hash(pwd.toUtf8(), QCryptographicHash::Sha256).toHex());
         const QString nick = QString::fromUtf8("用户") + phone.right(4);
-        const int uid = db_->execute(
+        const auto insert = db_->executeChecked(
             "INSERT INTO user(phone,nickname,avatar_path,password_hash,balance,status,created_at) VALUES(?,?,?,?,?,?,?)",
             {phone, nick, "", hash, 0.0, QString::fromUtf8("正常"), nowStr()});
-        auto user = db_->one("SELECT * FROM user WHERE id=?", {uid});
-        const QString token = issueToken(uid);
+        if (!insert.ok || insert.insertId <= 0) {
+            const int code = databaseErrorCode(insert.errorKind);
+            const QString message = insert.errorKind == Database::ErrorKind::Constraint
+                ? QString::fromUtf8("该账号已注册")
+                : databaseErrorMessage(insert.errorKind);
+            return fail(type, seq, code, message);
+        }
+        const auto loaded = db_->queryChecked("SELECT * FROM user WHERE id=?", {insert.insertId});
+        if (!loaded.ok || loaded.rows.isEmpty())
+            return fail(type, seq, databaseErrorCode(loaded.errorKind), databaseErrorMessage(loaded.errorKind));
+        const auto user = loaded.rows.first();
+        const QString token = issueToken(int(insert.insertId));
         return ok(type, seq, QString::fromUtf8("注册成功"),
                   QJsonObject{{"user", publicUser(user)}, {"token", token}, {"isNew", true}});
     }
@@ -326,10 +360,12 @@ QJsonObject Dispatch::handle(const QJsonObject &req)
     } else if (type == "RECHARGE") {
         body = recharge(user, data);
         if (body.contains("error"))
-            return fail(type, seq, 400, body.value("error").toString());
+            return fail(type, seq, body.value("errorCode").toInt(400), body.value("error").toString());
         message = QString::fromUtf8("充值成功");
     } else if (type == "QUERY_STATIONS") {
         body = queryStations(user, data);
+        if (body.contains("error"))
+            return fail(type, seq, body.value("errorCode").toInt(500), body.value("error").toString());
     } else if (type == "CLOSE_ACCOUNT") {
         body = closeAccount(user);
         if (body.contains("error"))
@@ -338,7 +374,7 @@ QJsonObject Dispatch::handle(const QJsonObject &req)
     } else if (type == "QUERY_PILES") {
         body = queryPiles(user, data);
         if (body.contains("error"))
-            return fail(type, seq, 404, body.value("error").toString());
+            return fail(type, seq, body.value("errorCode").toInt(404), body.value("error").toString());
     } else if (type == "START_CHARGE") {
         body = startCharge(user, data);
         if (body.contains("errorCode"))
@@ -363,6 +399,8 @@ QJsonObject Dispatch::handle(const QJsonObject &req)
         body = listRecharge(user);
     } else if (type == "LIST_RESERVATIONS") {
         body = listReservations(user);
+        if (body.contains("error"))
+            return fail(type, seq, body.value("errorCode").toInt(500), body.value("error").toString());
     } else if (type == "RESERVE_PILE") {
         body = reservePile(user, data);
         if (body.contains("errorCode"))
@@ -376,7 +414,7 @@ QJsonObject Dispatch::handle(const QJsonObject &req)
     } else if (type == "REVIEW_STATION") {
         body = reviewStation(user, data);
         if (body.contains("error"))
-            return fail(type, seq, 400, body.value("error").toString());
+            return fail(type, seq, body.value("errorCode").toInt(400), body.value("error").toString());
         message = body.value("updated").toBool() ? QString::fromUtf8("已更新你对这根桩的评价")
                                                  : QString::fromUtf8("评价已提交");
     } else if (type == "LIST_PILE_REVIEWS") {
@@ -443,21 +481,47 @@ QJsonObject Dispatch::recharge(const QVariantMap &user, const QJsonObject &data)
     const double amount = data.value("amount").toVariant().toDouble(&ok);
     if (!ok || amount <= 0 || amount > 10000)
         return QJsonObject{{"error", QString::fromUtf8("单笔充值须大于 0 且不超过 10000 元")}};
-    const double nb = money(user.value("balance").toDouble() + amount);
+    Database::ErrorKind errorKind = Database::ErrorKind::None;
+    qint64 rechargeId = 0;
+    QVariantMap updatedUser;
     const QString t = nowStr();
-    db_->execute("UPDATE user SET balance=? WHERE id=?", {nb, user.value("id")});
-    db_->execute("INSERT INTO recharge_log(user_id,amount,result,created_at) VALUES(?,?,?,?)",
-                 {user.value("id"), money(amount), QString::fromUtf8("成功"), t});
-    const auto last = db_->one("SELECT id FROM recharge_log WHERE user_id=? ORDER BY id DESC LIMIT 1",
-                               {user.value("id")});
-    const QString tradeNo = QString("RC%1").arg(last.value("id").toInt(), 8, 10, QChar('0'));
-    auto u = db_->one("SELECT * FROM user WHERE id=?", {user.value("id")});
-    return QJsonObject{{"user", publicUser(u)}, {"tradeNo", tradeNo}, {"amount", money(amount)}};
+    const bool committed = db_->runTransaction([&]() {
+        const auto balance = db_->executeChecked(
+            "UPDATE user SET balance=ROUND(balance + ?, 2) WHERE id=?",
+            {money(amount), user.value("id")});
+        if (!balance.ok || balance.rowsAffected != 1) {
+            errorKind = balance.ok ? Database::ErrorKind::Other : balance.errorKind;
+            return false;
+        }
+        const auto log = db_->executeChecked(
+            "INSERT INTO recharge_log(user_id,amount,result,created_at) VALUES(?,?,?,?)",
+            {user.value("id"), money(amount), QString::fromUtf8("成功"), t});
+        if (!log.ok || log.insertId <= 0) {
+            errorKind = log.ok ? Database::ErrorKind::Other : log.errorKind;
+            return false;
+        }
+        rechargeId = log.insertId;
+        const auto loaded = db_->queryChecked("SELECT * FROM user WHERE id=?", {user.value("id")});
+        if (!loaded.ok || loaded.rows.isEmpty()) {
+            errorKind = loaded.ok ? Database::ErrorKind::Other : loaded.errorKind;
+            return false;
+        }
+        updatedUser = loaded.rows.first();
+        return true;
+    }, &errorKind);
+    if (!committed)
+        return databaseFailure(errorKind);
+    const QString tradeNo = QString("RC%1").arg(rechargeId, 8, 10, QChar('0'));
+    return QJsonObject{{"user", publicUser(updatedUser)},
+                       {"tradeNo", tradeNo},
+                       {"amount", money(amount)}};
 }
 
 QJsonObject Dispatch::queryStations(const QVariantMap &user, const QJsonObject &data)
 {
-    expireReservations();
+    const auto expired = expireReservations();
+    if (!expired.ok)
+        return databaseFailure(expired.errorKind);
     const auto stations = db_->query("SELECT * FROM station");
     QString address = data.value("address").toString().trimmed();
     if (address.isEmpty())
@@ -598,7 +662,9 @@ QJsonObject Dispatch::closeAccount(const QVariantMap &user)
 
 QJsonObject Dispatch::queryPiles(const QVariantMap &user, const QJsonObject &data)
 {
-    expireReservations();
+    const auto expired = expireReservations();
+    if (!expired.ok)
+        return databaseFailure(expired.errorKind);
     const int sid = data.value("stationId").toInt();
     const int uid = user.value("id").toInt();
     auto station = db_->one("SELECT * FROM station WHERE id=?", {sid});
@@ -712,33 +778,121 @@ QJsonObject Dispatch::publicOrder(const QVariantMap &o, const QVariantMap &p, co
 
 QJsonObject Dispatch::startCharge(const QVariantMap &user, const QJsonObject &data)
 {
-    expireReservations();
-    if (!openOrder(user.value("id").toInt()).isEmpty())
-        return QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("您有未完成的充电订单，请先结算")}};
-    if (user.value("balance").toDouble() <= 0)
-        return QJsonObject{{"errorCode", 402}, {"error", QString::fromUtf8("余额不足，请先充值")}};
     const int pileId = data.value("pileId").toInt();
-    auto pile = db_->one("SELECT * FROM pile WHERE id=?", {pileId});
-    if (pile.isEmpty())
-        return QJsonObject{{"errorCode", 404}, {"error", QString::fromUtf8("电桩不存在")}};
-    const QString st = pile.value("status").toString();
-    if (st == QString::fromUtf8("故障"))
-        return QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("电桩故障，请选择其他电桩")}};
-    if (st == QString::fromUtf8("在用"))
-        return QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("电桩正在使用中")}};
-    auto res = activeReserve(pileId);
-    if (!res.isEmpty() && res.value("user_id").toInt() != user.value("id").toInt())
-        return QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("该桩已被他人预约")}};
-    auto station = db_->one("SELECT * FROM station WHERE id=?", {pile.value("station_id")});
-    const QString t = nowStr();
-    const QString no = "CH" + QDateTime::currentDateTime().toString("yyyyMMddHHmmss") + QString::number(user.value("id").toInt());
-    const int oid = db_->execute(
-        "INSERT INTO charge_order(order_no,user_id,pile_id,status,start_time,energy_kwh,amount,created_at) VALUES(?,?,?,?,?,?,?,?)",
-        {no, user.value("id"), pileId, QString::fromUtf8("充电中"), t, 0, 0, t});
-    db_->execute("UPDATE pile SET status=? WHERE id=?", {QString::fromUtf8("在用"), pileId});
-    if (!res.isEmpty())
-        db_->execute("UPDATE reservation SET status=? WHERE id=?", {QString::fromUtf8("已履约"), res.value("id")});
-    auto order = db_->one("SELECT * FROM charge_order WHERE id=?", {oid});
+    const int userId = user.value("id").toInt();
+    Database::ErrorKind errorKind = Database::ErrorKind::None;
+    QJsonObject rejection;
+    QVariantMap pile;
+    QVariantMap station;
+    QVariantMap order;
+    const bool committed = db_->runTransaction([&]() {
+        const auto expired = expireReservations();
+        if (!expired.ok) {
+            errorKind = expired.errorKind;
+            return false;
+        }
+        const auto open = db_->queryChecked(
+            "SELECT * FROM charge_order WHERE user_id=? AND status IN ('充电中','待结算') "
+            "ORDER BY id DESC LIMIT 1", {userId});
+        if (!open.ok) {
+            errorKind = open.errorKind;
+            return false;
+        }
+        if (!open.rows.isEmpty()) {
+            rejection = QJsonObject{{"errorCode", 409},
+                                    {"error", QString::fromUtf8("您有未完成的充电订单，请先结算")}};
+            return false;
+        }
+        const auto currentUser = db_->queryChecked("SELECT balance FROM user WHERE id=?", {userId});
+        if (!currentUser.ok || currentUser.rows.isEmpty()) {
+            errorKind = currentUser.ok ? Database::ErrorKind::Other : currentUser.errorKind;
+            return false;
+        }
+        if (currentUser.rows.first().value("balance").toDouble() <= 0) {
+            rejection = QJsonObject{{"errorCode", 402},
+                                    {"error", QString::fromUtf8("余额不足，请先充值")}};
+            return false;
+        }
+        const auto pileRows = db_->queryChecked("SELECT * FROM pile WHERE id=?", {pileId});
+        if (!pileRows.ok) {
+            errorKind = pileRows.errorKind;
+            return false;
+        }
+        if (pileRows.rows.isEmpty()) {
+            rejection = QJsonObject{{"errorCode", 404}, {"error", QString::fromUtf8("电桩不存在")}};
+            return false;
+        }
+        pile = pileRows.rows.first();
+        const QString pileStatus = pile.value("status").toString();
+        if (pileStatus == QString::fromUtf8("故障")) {
+            rejection = QJsonObject{{"errorCode", 409},
+                                    {"error", QString::fromUtf8("电桩故障，请选择其他电桩")}};
+            return false;
+        }
+        if (pileStatus != QString::fromUtf8("闲置")) {
+            rejection = QJsonObject{{"errorCode", 409},
+                                    {"error", QString::fromUtf8("电桩正在使用中")}};
+            return false;
+        }
+        const auto reservations = db_->queryChecked(
+            "SELECT * FROM reservation WHERE pile_id=? AND status='有效' ORDER BY id DESC LIMIT 1",
+            {pileId});
+        if (!reservations.ok) {
+            errorKind = reservations.errorKind;
+            return false;
+        }
+        const QVariantMap reservation = reservations.rows.isEmpty() ? QVariantMap()
+                                                                     : reservations.rows.first();
+        if (!reservation.isEmpty() && reservation.value("user_id").toInt() != userId) {
+            rejection = QJsonObject{{"errorCode", 409},
+                                    {"error", QString::fromUtf8("该桩已被他人预约")}};
+            return false;
+        }
+        const auto stationRows = db_->queryChecked("SELECT * FROM station WHERE id=?",
+                                                   {pile.value("station_id")});
+        if (!stationRows.ok || stationRows.rows.isEmpty()) {
+            errorKind = stationRows.ok ? Database::ErrorKind::Other : stationRows.errorKind;
+            return false;
+        }
+        station = stationRows.rows.first();
+        const auto claimed = db_->executeChecked(
+            "UPDATE pile SET status=? WHERE id=? AND status=?",
+            {QString::fromUtf8("在用"), pileId, QString::fromUtf8("闲置")});
+        if (!claimed.ok || claimed.rowsAffected != 1) {
+            errorKind = claimed.ok ? Database::ErrorKind::Constraint : claimed.errorKind;
+            return false;
+        }
+        const QString t = nowStr();
+        const QString orderNo = QStringLiteral("CH")
+            + QUuid::createUuid().toString(QUuid::WithoutBraces).remove(QLatin1Char('-')).toUpper();
+        const auto inserted = db_->executeChecked(
+            "INSERT INTO charge_order(order_no,user_id,pile_id,status,start_time,energy_kwh,amount,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            {orderNo, userId, pileId, QString::fromUtf8("充电中"), t, 0, 0, t});
+        if (!inserted.ok || inserted.insertId <= 0) {
+            errorKind = inserted.ok ? Database::ErrorKind::Other : inserted.errorKind;
+            return false;
+        }
+        if (!reservation.isEmpty()) {
+            const auto fulfilled = db_->executeChecked(
+                "UPDATE reservation SET status=? WHERE id=? AND status=?",
+                {QString::fromUtf8("已履约"), reservation.value("id"), QString::fromUtf8("有效")});
+            if (!fulfilled.ok || fulfilled.rowsAffected != 1) {
+                errorKind = fulfilled.ok ? Database::ErrorKind::Constraint : fulfilled.errorKind;
+                return false;
+            }
+        }
+        const auto insertedOrder = db_->queryChecked("SELECT * FROM charge_order WHERE id=?",
+                                                     {inserted.insertId});
+        if (!insertedOrder.ok || insertedOrder.rows.isEmpty()) {
+            errorKind = insertedOrder.ok ? Database::ErrorKind::Other : insertedOrder.errorKind;
+            return false;
+        }
+        order = insertedOrder.rows.first();
+        return true;
+    }, &errorKind);
+    if (!committed)
+        return rejection.isEmpty() ? databaseFailure(errorKind) : rejection;
     return QJsonObject{{"order", publicOrder(order, pile, station, calcLive(order, pile, station))}};
 }
 
@@ -754,43 +908,150 @@ QJsonObject Dispatch::chargeStatus(const QVariantMap &user)
 
 QJsonObject Dispatch::stopCharge(const QVariantMap &user)
 {
-    auto order = db_->one(
-        "SELECT * FROM charge_order WHERE user_id=? AND status='充电中' ORDER BY id DESC LIMIT 1",
-        {user.value("id")});
-    if (order.isEmpty())
-        return QJsonObject{{"errorCode", 404}, {"error", QString::fromUtf8("没有正在进行的充电")}};
-    auto pile = db_->one("SELECT * FROM pile WHERE id=?", {order.value("pile_id")});
-    auto station = db_->one("SELECT * FROM station WHERE id=?", {pile.value("station_id")});
-    auto live = calcLive(order, pile, station);
-    const int minutes = qMax(1, live.value("seconds").toInt() / 60);
-    db_->execute("UPDATE charge_order SET status=?, end_time=?, energy_kwh=?, amount=? WHERE id=?",
-                 {QString::fromUtf8("待结算"), nowStr(), live.value("energyKwh").toDouble(),
-                  live.value("amount").toDouble(), order.value("id")});
-    db_->execute(
-        "UPDATE pile SET status=?, total_charge_count=total_charge_count+1, total_charge_minutes=total_charge_minutes+? WHERE id=?",
-        {QString::fromUtf8("闲置"), minutes, pile.value("id")});
-    order = db_->one("SELECT * FROM charge_order WHERE id=?", {order.value("id")});
+    Database::ErrorKind errorKind = Database::ErrorKind::None;
+    QJsonObject rejection;
+    QVariantMap order;
+    QVariantMap pile;
+    QVariantMap station;
+    QJsonObject live;
+    const bool committed = db_->runTransaction([&]() {
+        const auto orders = db_->queryChecked(
+            "SELECT * FROM charge_order WHERE user_id=? AND status='充电中' ORDER BY id DESC LIMIT 1",
+            {user.value("id")});
+        if (!orders.ok) {
+            errorKind = orders.errorKind;
+            return false;
+        }
+        if (orders.rows.isEmpty()) {
+            rejection = QJsonObject{{"errorCode", 404},
+                                    {"error", QString::fromUtf8("没有正在进行的充电")}};
+            return false;
+        }
+        order = orders.rows.first();
+        const auto piles = db_->queryChecked("SELECT * FROM pile WHERE id=?", {order.value("pile_id")});
+        if (!piles.ok || piles.rows.isEmpty()) {
+            errorKind = piles.ok ? Database::ErrorKind::Other : piles.errorKind;
+            return false;
+        }
+        pile = piles.rows.first();
+        const auto stations = db_->queryChecked("SELECT * FROM station WHERE id=?",
+                                                {pile.value("station_id")});
+        if (!stations.ok || stations.rows.isEmpty()) {
+            errorKind = stations.ok ? Database::ErrorKind::Other : stations.errorKind;
+            return false;
+        }
+        station = stations.rows.first();
+        live = calcLive(order, pile, station);
+        const int minutes = qMax(1, live.value("seconds").toInt() / 60);
+        const auto stopped = db_->executeChecked(
+            "UPDATE charge_order SET status=?, end_time=?, energy_kwh=?, amount=? "
+            "WHERE id=? AND status=?",
+            {QString::fromUtf8("待结算"), nowStr(), live.value("energyKwh").toDouble(),
+             live.value("amount").toDouble(), order.value("id"), QString::fromUtf8("充电中")});
+        if (!stopped.ok || stopped.rowsAffected != 1) {
+            errorKind = stopped.ok ? Database::ErrorKind::Constraint : stopped.errorKind;
+            return false;
+        }
+        const auto released = db_->executeChecked(
+            "UPDATE pile SET status=?, total_charge_count=total_charge_count+1, "
+            "total_charge_minutes=total_charge_minutes+? WHERE id=?",
+            {QString::fromUtf8("闲置"), minutes, pile.value("id")});
+        if (!released.ok || released.rowsAffected != 1) {
+            errorKind = released.ok ? Database::ErrorKind::Other : released.errorKind;
+            return false;
+        }
+        const auto updated = db_->queryChecked("SELECT * FROM charge_order WHERE id=?", {order.value("id")});
+        if (!updated.ok || updated.rows.isEmpty()) {
+            errorKind = updated.ok ? Database::ErrorKind::Other : updated.errorKind;
+            return false;
+        }
+        order = updated.rows.first();
+        return true;
+    }, &errorKind);
+    if (!committed)
+        return rejection.isEmpty() ? databaseFailure(errorKind) : rejection;
     return QJsonObject{{"order", publicOrder(order, pile, station, calcLive(order, pile, station))}};
 }
 
 QJsonObject Dispatch::settle(const QVariantMap &userIn)
 {
-    auto order = db_->one(
-        "SELECT * FROM charge_order WHERE user_id=? AND status='待结算' ORDER BY id DESC LIMIT 1",
-        {userIn.value("id")});
-    if (order.isEmpty())
-        return QJsonObject{{"errorCode", 404}, {"error", QString::fromUtf8("没有待结算订单")}};
-    auto user = db_->one("SELECT * FROM user WHERE id=?", {userIn.value("id")});
-    if (user.value("balance").toDouble() + 1e-6 < order.value("amount").toDouble())
-        return QJsonObject{{"errorCode", 402}, {"error", QString::fromUtf8("余额不足，请先充值后再结算")}};
-    const double nb = money(user.value("balance").toDouble() - order.value("amount").toDouble());
-    db_->execute("UPDATE user SET balance=? WHERE id=?", {nb, user.value("id")});
-    db_->execute("UPDATE charge_order SET status=? WHERE id=?", {QString::fromUtf8("已完成"), order.value("id")});
-    user = db_->one("SELECT * FROM user WHERE id=?", {user.value("id")});
-    auto pile = db_->one("SELECT * FROM pile WHERE id=?", {order.value("pile_id")});
-    auto station = db_->one("SELECT * FROM station WHERE id=?", {pile.value("station_id")});
-    auto live = calcLive(order, pile, station);
-    return QJsonObject{{"order", publicOrder(order, pile, station, live)}, {"user", publicUser(user)}};
+    Database::ErrorKind errorKind = Database::ErrorKind::None;
+    QJsonObject rejection;
+    QVariantMap order;
+    QVariantMap currentUser;
+    QVariantMap pile;
+    QVariantMap station;
+    const bool committed = db_->runTransaction([&]() {
+        const auto orders = db_->queryChecked(
+            "SELECT * FROM charge_order WHERE user_id=? AND status='待结算' ORDER BY id DESC LIMIT 1",
+            {userIn.value("id")});
+        if (!orders.ok) {
+            errorKind = orders.errorKind;
+            return false;
+        }
+        if (orders.rows.isEmpty()) {
+            rejection = QJsonObject{{"errorCode", 404},
+                                    {"error", QString::fromUtf8("没有待结算订单")}};
+            return false;
+        }
+        order = orders.rows.first();
+        const auto users = db_->queryChecked("SELECT * FROM user WHERE id=?", {userIn.value("id")});
+        if (!users.ok || users.rows.isEmpty()) {
+            errorKind = users.ok ? Database::ErrorKind::Other : users.errorKind;
+            return false;
+        }
+        currentUser = users.rows.first();
+        if (currentUser.value("balance").toDouble() + 1e-6 < order.value("amount").toDouble()) {
+            rejection = QJsonObject{{"errorCode", 402},
+                                    {"error", QString::fromUtf8("余额不足，请先充值后再结算")}};
+            return false;
+        }
+        const auto debited = db_->executeChecked(
+            "UPDATE user SET balance=ROUND(balance - ?, 2) WHERE id=? AND balance + 0.000001 >= ?",
+            {order.value("amount"), currentUser.value("id"), order.value("amount")});
+        if (!debited.ok || debited.rowsAffected != 1) {
+            errorKind = debited.ok ? Database::ErrorKind::Constraint : debited.errorKind;
+            return false;
+        }
+        const auto settled = db_->executeChecked(
+            "UPDATE charge_order SET status=? WHERE id=? AND status=?",
+            {QString::fromUtf8("已完成"), order.value("id"), QString::fromUtf8("待结算")});
+        if (!settled.ok || settled.rowsAffected != 1) {
+            errorKind = settled.ok ? Database::ErrorKind::Constraint : settled.errorKind;
+            return false;
+        }
+        const auto usersAfter = db_->queryChecked("SELECT * FROM user WHERE id=?", {currentUser.value("id")});
+        if (!usersAfter.ok || usersAfter.rows.isEmpty()) {
+            errorKind = usersAfter.ok ? Database::ErrorKind::Other : usersAfter.errorKind;
+            return false;
+        }
+        currentUser = usersAfter.rows.first();
+        const auto ordersAfter = db_->queryChecked("SELECT * FROM charge_order WHERE id=?", {order.value("id")});
+        if (!ordersAfter.ok || ordersAfter.rows.isEmpty()) {
+            errorKind = ordersAfter.ok ? Database::ErrorKind::Other : ordersAfter.errorKind;
+            return false;
+        }
+        order = ordersAfter.rows.first();
+        const auto piles = db_->queryChecked("SELECT * FROM pile WHERE id=?", {order.value("pile_id")});
+        if (!piles.ok || piles.rows.isEmpty()) {
+            errorKind = piles.ok ? Database::ErrorKind::Other : piles.errorKind;
+            return false;
+        }
+        pile = piles.rows.first();
+        const auto stations = db_->queryChecked("SELECT * FROM station WHERE id=?",
+                                                {pile.value("station_id")});
+        if (!stations.ok || stations.rows.isEmpty()) {
+            errorKind = stations.ok ? Database::ErrorKind::Other : stations.errorKind;
+            return false;
+        }
+        station = stations.rows.first();
+        return true;
+    }, &errorKind);
+    if (!committed)
+        return rejection.isEmpty() ? databaseFailure(errorKind) : rejection;
+    const auto live = calcLive(order, pile, station);
+    return QJsonObject{{"order", publicOrder(order, pile, station, live)},
+                       {"user", publicUser(currentUser)}};
 }
 
 QJsonObject Dispatch::adminLogin(const QString &user, const QString &pwd)
@@ -811,28 +1072,42 @@ QJsonObject Dispatch::adminRegister(const QString &user, const QString &pwd)
     if (!db_->one("SELECT id FROM admin WHERE username=?", {user}).isEmpty())
         return QJsonObject{{"ok", false}, {"message", QString::fromUtf8("该账号已注册")}};
     const QByteArray hash = QCryptographicHash::hash(pwd.toUtf8(), QCryptographicHash::Sha256).toHex();
-    db_->execute("INSERT INTO admin(username,password_hash,created_at) VALUES(?,?,?)",
-                 {user, QString::fromLatin1(hash), nowStr()});
+    const auto inserted = db_->executeChecked(
+        "INSERT INTO admin(username,password_hash,created_at) VALUES(?,?,?)",
+        {user, QString::fromLatin1(hash), nowStr()});
+    if (!inserted.ok || inserted.insertId <= 0) {
+        const QString message = inserted.errorKind == Database::ErrorKind::Constraint
+            ? QString::fromUtf8("该账号已注册")
+            : databaseErrorMessage(inserted.errorKind);
+        return QJsonObject{{"ok", false}, {"message", message}};
+    }
     return QJsonObject{{"ok", true}, {"username", user}, {"registered", true}};
 }
 
 QJsonObject Dispatch::salesSummary() const
 {
-    const QString today = QDate::currentDate().toString("yyyy-MM-dd");
-    const QString month = QDate::currentDate().toString("yyyy-MM");
-    auto sumWhere = [this](const QString &w, const QVariantList &a) {
-        auto r = db_->one("SELECT IFNULL(SUM(amount),0) AS s FROM charge_order WHERE status='已完成' AND " + w, a);
+    auto sumRange = [this](const QDate &from, const QDate &to) {
+        const auto r = db_->one(
+            "SELECT IFNULL(SUM(amount),0) AS s FROM charge_order "
+            "WHERE status='已完成' AND start_time>=? AND start_time<?",
+            {from.toString("yyyy-MM-dd") + QStringLiteral(" 00:00:00"),
+             to.toString("yyyy-MM-dd") + QStringLiteral(" 00:00:00")});
         return money(r.value("s").toDouble());
     };
+    const QDate today = QDate::currentDate();
+    const QDate monthStart(today.year(), today.month(), 1);
     QJsonArray trend;
     for (int i = 29; i >= 0; --i) {
-        const QString d = QDate::currentDate().addDays(-i).toString("yyyy-MM-dd");
-        trend.append(QJsonObject{{"date", d}, {"amount", sumWhere("substr(start_time,1,10)=?", {d})}});
+        const QDate date = today.addDays(-i);
+        trend.append(QJsonObject{{"date", date.toString("yyyy-MM-dd")},
+                                 {"amount", sumRange(date, date.addDays(1))}});
     }
+    const auto total = db_->one(
+        "SELECT IFNULL(SUM(amount),0) AS s FROM charge_order WHERE status='已完成'");
     return QJsonObject{
-        {"today", sumWhere("substr(start_time,1,10)=?", {today})},
-        {"month", sumWhere("substr(start_time,1,7)=?", {month})},
-        {"total", sumWhere("1=1", {})},
+        {"today", sumRange(today, today.addDays(1))},
+        {"month", sumRange(monthStart, monthStart.addMonths(1))},
+        {"total", money(total.value("s").toDouble())},
         {"trend", trend},
     };
 }
@@ -939,24 +1214,45 @@ int Dispatch::addStation(const QVariantMap &data)
 {
     const QString name = data.value("name").toString().trimmed();
     const QString address = data.value("address").toString().trimmed();
-    const int sid = db_->execute(
-        "INSERT INTO station(name,address,lng,lat,price_per_kwh) VALUES(?,?,?,?,?)",
-        {name, address, data.value("lng"), data.value("lat"), data.value("pricePerKwh", 1.3)});
     const int n = data.value("pileCount", 4).toInt();
-    for (int i = 1; i <= n; ++i) {
-        const bool fast = i <= qMax(1, n / 2);
-        db_->execute("INSERT INTO pile(pile_no,station_id,type,power_kw,status) VALUES(?,?,?,?,?)",
-                     {QString("ST%1-P%2").arg(sid, 2, 10, QChar('0')).arg(i, 2, 10, QChar('0')),
-                      sid, fast ? QString::fromUtf8("快充") : QString::fromUtf8("慢充"),
-                      fast ? 60.0 : 7.0, QString::fromUtf8("闲置")});
+    Database::ErrorKind errorKind = Database::ErrorKind::None;
+    qint64 stationId = 0;
+    const bool committed = db_->runTransaction([&]() {
+        const auto station = db_->executeChecked(
+            "INSERT INTO station(name,address,lng,lat,price_per_kwh) VALUES(?,?,?,?,?)",
+            {name, address, data.value("lng"), data.value("lat"), data.value("pricePerKwh", 1.3)});
+        if (!station.ok || station.insertId <= 0) {
+            errorKind = station.ok ? Database::ErrorKind::Other : station.errorKind;
+            return false;
+        }
+        stationId = station.insertId;
+        for (int i = 1; i <= n; ++i) {
+            const bool fast = i <= qMax(1, n / 2);
+            const auto pile = db_->executeChecked(
+                "INSERT INTO pile(pile_no,station_id,type,power_kw,status) VALUES(?,?,?,?,?)",
+                {QString("ST%1-P%2").arg(stationId, 2, 10, QChar('0')).arg(i, 2, 10, QChar('0')),
+                 stationId, fast ? QString::fromUtf8("快充") : QString::fromUtf8("慢充"),
+                 fast ? 60.0 : 7.0, QString::fromUtf8("闲置")});
+            if (!pile.ok || pile.insertId <= 0) {
+                errorKind = pile.ok ? Database::ErrorKind::Other : pile.errorKind;
+                return false;
+            }
+        }
+        return true;
+    }, &errorKind);
+    if (!committed) {
+        qCritical().noquote() << "Add station transaction failed with error kind"
+                              << int(errorKind);
+        return 0;
     }
-    return sid;
+    return int(stationId);
 }
 
-void Dispatch::expireReservations() const
+Database::WriteResult Dispatch::expireReservations() const
 {
-    db_->execute("UPDATE reservation SET status=? WHERE status=? AND expire_at < ?",
-                 {QString::fromUtf8("已取消"), QString::fromUtf8("有效"), nowStr()});
+    return db_->executeChecked(
+        "UPDATE reservation SET status=? WHERE status=? AND expire_at < ?",
+        {QString::fromUtf8("已取消"), QString::fromUtf8("有效"), nowStr()});
 }
 
 QVariantMap Dispatch::activeReserve(int pileId) const
@@ -1019,7 +1315,9 @@ QJsonObject Dispatch::listRecharge(const QVariantMap &user)
 
 QJsonObject Dispatch::listReservations(const QVariantMap &user)
 {
-    expireReservations();
+    const auto expired = expireReservations();
+    if (!expired.ok)
+        return databaseFailure(expired.errorKind);
     const auto rows = db_->query(
         "SELECT r.id, r.pile_id, r.status, r.expire_at, r.created_at, "
         "p.pile_no, p.type, p.power_kw, p.status AS pile_status, "
@@ -1027,9 +1325,9 @@ QJsonObject Dispatch::listReservations(const QVariantMap &user)
         "FROM reservation r "
         "JOIN pile p ON p.id=r.pile_id "
         "JOIN station s ON s.id=p.station_id "
-        "WHERE r.user_id=? AND r.status='有效' "
+        "WHERE r.user_id=? AND r.status=? "
         "ORDER BY r.expire_at, r.id DESC",
-        {user.value("id")});
+        {user.value("id"), QString::fromUtf8("有效")});
 
     QJsonArray arr;
     const QDateTime now = QDateTime::currentDateTime();
@@ -1061,32 +1359,83 @@ QJsonObject Dispatch::listReservations(const QVariantMap &user)
 
 QJsonObject Dispatch::reservePile(const QVariantMap &user, const QJsonObject &data)
 {
-    expireReservations();
     const int pileId = data.value("pileId").toInt();
-    auto pile = db_->one("SELECT * FROM pile WHERE id=?", {pileId});
-    if (pile.isEmpty())
-        return QJsonObject{{"errorCode", 404}, {"error", QString::fromUtf8("电桩不存在")}};
-    if (pile.value("status").toString() != QString::fromUtf8("闲置"))
-        return QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("仅闲置电桩可预约")}};
-    if (!activeReserve(pileId).isEmpty())
-        return QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("该桩已被预约")}};
-    auto mine = db_->one("SELECT * FROM reservation WHERE user_id=? AND status='有效'", {user.value("id")});
-    if (!mine.isEmpty())
-        return QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("您已有有效预约，请先取消或履约")}};
-    const QString expire = QDateTime::currentDateTime().addSecs(15 * 60).toString("yyyy-MM-dd HH:mm:ss");
-    const int rid = db_->execute(
-        "INSERT INTO reservation(user_id,pile_id,status,expire_at,created_at) VALUES(?,?,?,?,?)",
-        {user.value("id"), pileId, QString::fromUtf8("有效"), expire, nowStr()});
-    return QJsonObject{{"reservation", QJsonObject{{"id", rid}, {"pileId", pileId}, {"expireAt", expire}}}};
+    Database::ErrorKind errorKind = Database::ErrorKind::None;
+    QJsonObject rejection;
+    qint64 reservationId = 0;
+    QString expire;
+    const bool committed = db_->runTransaction([&]() {
+        const auto expired = expireReservations();
+        if (!expired.ok) {
+            errorKind = expired.errorKind;
+            return false;
+        }
+        const auto piles = db_->queryChecked("SELECT * FROM pile WHERE id=?", {pileId});
+        if (!piles.ok) {
+            errorKind = piles.errorKind;
+            return false;
+        }
+        if (piles.rows.isEmpty()) {
+            rejection = QJsonObject{{"errorCode", 404}, {"error", QString::fromUtf8("电桩不存在")}};
+            return false;
+        }
+        if (piles.rows.first().value("status").toString() != QString::fromUtf8("闲置")) {
+            rejection = QJsonObject{{"errorCode", 409},
+                                    {"error", QString::fromUtf8("仅闲置电桩可预约")}};
+            return false;
+        }
+        const auto pileReservation = db_->queryChecked(
+            "SELECT id FROM reservation WHERE pile_id=? AND status='有效' LIMIT 1", {pileId});
+        if (!pileReservation.ok) {
+            errorKind = pileReservation.errorKind;
+            return false;
+        }
+        if (!pileReservation.rows.isEmpty()) {
+            rejection = QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("该桩已被预约")}};
+            return false;
+        }
+        const auto mine = db_->queryChecked(
+            "SELECT id FROM reservation WHERE user_id=? AND status='有效' LIMIT 1",
+            {user.value("id")});
+        if (!mine.ok) {
+            errorKind = mine.errorKind;
+            return false;
+        }
+        if (!mine.rows.isEmpty()) {
+            rejection = QJsonObject{{"errorCode", 409},
+                                    {"error", QString::fromUtf8("您已有有效预约，请先取消或履约")}};
+            return false;
+        }
+        expire = QDateTime::currentDateTime().addSecs(15 * 60).toString("yyyy-MM-dd HH:mm:ss");
+        const auto inserted = db_->executeChecked(
+            "INSERT INTO reservation(user_id,pile_id,status,expire_at,created_at) VALUES(?,?,?,?,?)",
+            {user.value("id"), pileId, QString::fromUtf8("有效"), expire, nowStr()});
+        if (!inserted.ok || inserted.insertId <= 0) {
+            errorKind = inserted.ok ? Database::ErrorKind::Other : inserted.errorKind;
+            return false;
+        }
+        reservationId = inserted.insertId;
+        return true;
+    }, &errorKind);
+    if (!committed)
+        return rejection.isEmpty() ? databaseFailure(errorKind) : rejection;
+    return QJsonObject{{"reservation", QJsonObject{{"id", int(reservationId)},
+                                                    {"pileId", pileId},
+                                                    {"expireAt", expire}}}};
 }
 
 QJsonObject Dispatch::cancelReserve(const QVariantMap &user)
 {
-    auto row = db_->one("SELECT * FROM reservation WHERE user_id=? AND status='有效' ORDER BY id DESC LIMIT 1",
-                        {user.value("id")});
-    if (row.isEmpty())
+    const auto cancelled = db_->executeChecked(
+        "UPDATE reservation SET status=? WHERE id=("
+        "SELECT id FROM reservation WHERE user_id=? AND status=? ORDER BY id DESC LIMIT 1"
+        ") AND status=?",
+        {QString::fromUtf8("已取消"), user.value("id"), QString::fromUtf8("有效"),
+         QString::fromUtf8("有效")});
+    if (!cancelled.ok)
+        return databaseFailure(cancelled.errorKind);
+    if (cancelled.rowsAffected == 0)
         return QJsonObject{{"errorCode", 404}, {"error", QString::fromUtf8("没有有效预约")}};
-    db_->execute("UPDATE reservation SET status=? WHERE id=?", {QString::fromUtf8("已取消"), row.value("id")});
     return QJsonObject{};
 }
 
@@ -1100,50 +1449,100 @@ QJsonObject Dispatch::reviewStation(const QVariantMap &user, const QJsonObject &
         return QJsonObject{{"error", QString::fromUtf8("评分须为 1~5 分")}};
     if (comment.size() < 2 || comment.size() > 300)
         return QJsonObject{{"error", QString::fromUtf8("评语须为 2~300 个字，不能只打分")}};
-    auto pile = db_->one("SELECT id, station_id FROM pile WHERE id=?", {pileId});
-    if (pile.isEmpty())
-        return QJsonObject{{"error", QString::fromUtf8("电桩不存在")}};
-    const int stationId = pile.value("station_id").toInt();
-    if (sid > 0 && sid != stationId)
-        return QJsonObject{{"error", QString::fromUtf8("电桩与电站不匹配")}};
     const int uid = user.value("id").toInt();
     const QString t = nowStr();
     const QJsonObject nlp = analyzeReview(score, comment);
-    QJsonObject doc{
-        {"schema", QStringLiteral("chargehub.review.v1")},
-        {"userId", uid},
-        {"pileId", pileId},
-        {"stationId", stationId},
-        {"score", score},
-        {"comment", comment},
-        {"createdAt", t},
-        {"updatedAt", t},
-        {"nlp", nlp},
-    };
-    auto old = db_->one("SELECT id FROM station_review WHERE user_id=? AND pile_id=?", {uid, pileId});
-    auto oldDoc = db_->one("SELECT id, doc FROM review_doc WHERE user_id=? AND pile_id=?", {uid, pileId});
-    if (!oldDoc.isEmpty()) {
-        auto prev = QJsonDocument::fromJson(oldDoc.value("doc").toString().toUtf8()).object();
-        if (!prev.value("createdAt").toString().isEmpty())
-            doc["createdAt"] = prev.value("createdAt");
-    }
-    if (!old.isEmpty()) {
-        db_->execute("UPDATE station_review SET score=?, comment=?, created_at=? WHERE id=?",
-                     {score, comment, t, old.value("id")});
-        if (!oldDoc.isEmpty())
-            db_->execute("UPDATE review_doc SET doc=?, created_at=? WHERE id=?",
-                         {dumpDoc(doc), t, oldDoc.value("id")});
-        else
-            db_->execute("INSERT INTO review_doc(pile_id,user_id,doc,created_at) VALUES(?,?,?,?)",
-                         {pileId, uid, dumpDoc(doc), t});
-        return QJsonObject{{"updated", true}, {"nlp", nlp}};
-    }
-    db_->execute(
-        "INSERT INTO station_review(user_id,station_id,pile_id,score,comment,created_at) VALUES(?,?,?,?,?,?)",
-        {uid, stationId, pileId, score, comment, t});
-    db_->execute("INSERT INTO review_doc(pile_id,user_id,doc,created_at) VALUES(?,?,?,?)",
-                 {pileId, uid, dumpDoc(doc), t});
-    return QJsonObject{{"updated", false}, {"nlp", nlp}};
+    Database::ErrorKind errorKind = Database::ErrorKind::None;
+    QJsonObject rejection;
+    bool updated = false;
+    const bool committed = db_->runTransaction([&]() {
+        const auto piles = db_->queryChecked("SELECT id, station_id FROM pile WHERE id=?", {pileId});
+        if (!piles.ok) {
+            errorKind = piles.errorKind;
+            return false;
+        }
+        if (piles.rows.isEmpty()) {
+            rejection = QJsonObject{{"error", QString::fromUtf8("电桩不存在")}};
+            return false;
+        }
+        const int stationId = piles.rows.first().value("station_id").toInt();
+        if (sid > 0 && sid != stationId) {
+            rejection = QJsonObject{{"error", QString::fromUtf8("电桩与电站不匹配")}};
+            return false;
+        }
+        QJsonObject doc{
+            {"schema", QStringLiteral("chargehub.review.v1")},
+            {"userId", uid},
+            {"pileId", pileId},
+            {"stationId", stationId},
+            {"score", score},
+            {"comment", comment},
+            {"createdAt", t},
+            {"updatedAt", t},
+            {"nlp", nlp},
+        };
+        const auto reviews = db_->queryChecked(
+            "SELECT id FROM station_review WHERE user_id=? AND pile_id=?", {uid, pileId});
+        if (!reviews.ok) {
+            errorKind = reviews.errorKind;
+            return false;
+        }
+        const auto docs = db_->queryChecked(
+            "SELECT id, doc FROM review_doc WHERE user_id=? AND pile_id=?", {uid, pileId});
+        if (!docs.ok) {
+            errorKind = docs.errorKind;
+            return false;
+        }
+        const QVariantMap old = reviews.rows.isEmpty() ? QVariantMap() : reviews.rows.first();
+        const QVariantMap oldDoc = docs.rows.isEmpty() ? QVariantMap() : docs.rows.first();
+        if (!oldDoc.isEmpty()) {
+            const auto previous = QJsonDocument::fromJson(oldDoc.value("doc").toString().toUtf8()).object();
+            if (!previous.value("createdAt").toString().isEmpty())
+                doc["createdAt"] = previous.value("createdAt");
+        }
+        if (!old.isEmpty()) {
+            const auto review = db_->executeChecked(
+                "UPDATE station_review SET score=?, comment=?, created_at=? WHERE id=?",
+                {score, comment, t, old.value("id")});
+            if (!review.ok || review.rowsAffected != 1) {
+                errorKind = review.ok ? Database::ErrorKind::Other : review.errorKind;
+                return false;
+            }
+            const auto document = oldDoc.isEmpty()
+                ? db_->executeChecked(
+                    "INSERT INTO review_doc(pile_id,user_id,doc,created_at) VALUES(?,?,?,?)",
+                    {pileId, uid, dumpDoc(doc), t})
+                : db_->executeChecked(
+                    "UPDATE review_doc SET doc=?, created_at=? WHERE id=?",
+                    {dumpDoc(doc), t, oldDoc.value("id")});
+            if (!document.ok || (oldDoc.isEmpty() ? document.insertId <= 0
+                                                   : document.rowsAffected != 1)) {
+                errorKind = document.ok ? Database::ErrorKind::Other : document.errorKind;
+                return false;
+            }
+            updated = true;
+            return true;
+        }
+        const auto review = db_->executeChecked(
+            "INSERT INTO station_review(user_id,station_id,pile_id,score,comment,created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            {uid, stationId, pileId, score, comment, t});
+        if (!review.ok || review.insertId <= 0) {
+            errorKind = review.ok ? Database::ErrorKind::Other : review.errorKind;
+            return false;
+        }
+        const auto document = db_->executeChecked(
+            "INSERT INTO review_doc(pile_id,user_id,doc,created_at) VALUES(?,?,?,?)",
+            {pileId, uid, dumpDoc(doc), t});
+        if (!document.ok || document.insertId <= 0) {
+            errorKind = document.ok ? Database::ErrorKind::Other : document.errorKind;
+            return false;
+        }
+        return true;
+    }, &errorKind);
+    if (!committed)
+        return rejection.isEmpty() ? databaseFailure(errorKind) : rejection;
+    return QJsonObject{{"updated", updated}, {"nlp", nlp}};
 }
 
 QJsonObject Dispatch::listPileReviews(const QVariantMap &user, const QJsonObject &data)

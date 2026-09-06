@@ -75,7 +75,7 @@ private:
     QJsonObject cancelReserve(const QVariantMap &user);
     QJsonObject reviewStation(const QVariantMap &user, const QJsonObject &data);
     QJsonObject listPileReviews(const QVariantMap &user, const QJsonObject &data);
-    void expireReservations() const;
+    Database::WriteResult expireReservations() const;
     QVariantMap activeReserve(int pileId) const;
     bool pileIsIdle(const QVariantMap &pile) const;
     QVariantMap openOrder(int userId) const;

@@ -45,6 +45,21 @@ void logSqlError(const QString &context, const QSqlError &error, const QString &
                           << "(SQL operation:" << sqlOperation(sql) + QLatin1Char(')');
 }
 
+Database::ErrorKind errorKindFor(const QSqlError &error)
+{
+    bool parsed = false;
+    const int nativeCode = error.nativeErrorCode().toInt(&parsed);
+    const int primaryCode = parsed ? (nativeCode & 0xff) : 0;
+    const QString text = error.text().toLower();
+    if (primaryCode == 5 || primaryCode == 6 || text.contains(QLatin1String("locked"))
+        || text.contains(QLatin1String("busy"))) {
+        return Database::ErrorKind::Busy;
+    }
+    if (primaryCode == 19 || text.contains(QLatin1String("constraint")))
+        return Database::ErrorKind::Constraint;
+    return Database::ErrorKind::Other;
+}
+
 bool execSql(QSqlQuery &query, const QString &sql, const QString &context)
 {
     if (query.exec(sql))
@@ -111,6 +126,50 @@ bool queryCount(QSqlDatabase &database, const QString &sql, const QString &conte
     }
     *count = query.value(0).toInt();
     return true;
+}
+
+bool hasNoUniquenessConflict(QSqlDatabase &database, const QString &sql,
+                             const QString &description)
+{
+    QSqlQuery query(database);
+    if (!execSql(query, sql, QStringLiteral("Check existing %1 conflicts").arg(description)))
+        return false;
+    if (query.next()) {
+        qCritical().noquote()
+            << "Cannot install database uniqueness constraints: existing database contains"
+            << description << "conflicts. No business data was changed.";
+        return false;
+    }
+    if (query.lastError().isValid()) {
+        logSqlError(QStringLiteral("Read existing %1 conflicts").arg(description),
+                    query.lastError(), sql);
+        return false;
+    }
+    return true;
+}
+
+bool validateBusinessUniqueness(QSqlDatabase &database)
+{
+    return hasNoUniquenessConflict(
+               database,
+               QStringLiteral("SELECT 1 FROM reservation WHERE status='有效' "
+                              "GROUP BY pile_id HAVING COUNT(*)>1 LIMIT 1"),
+               QStringLiteral("duplicate active reservations for one pile"))
+        && hasNoUniquenessConflict(
+            database,
+            QStringLiteral("SELECT 1 FROM reservation WHERE status='有效' "
+                           "GROUP BY user_id HAVING COUNT(*)>1 LIMIT 1"),
+            QStringLiteral("duplicate active reservations for one user"))
+        && hasNoUniquenessConflict(
+            database,
+            QStringLiteral("SELECT 1 FROM charge_order WHERE status IN ('充电中','待结算') "
+                           "GROUP BY user_id HAVING COUNT(*)>1 LIMIT 1"),
+            QStringLiteral("duplicate unfinished orders for one user"))
+        && hasNoUniquenessConflict(
+            database,
+            QStringLiteral("SELECT 1 FROM charge_order WHERE status='充电中' "
+                           "GROUP BY pile_id HAVING COUNT(*)>1 LIMIT 1"),
+            QStringLiteral("duplicate charging orders for one pile"));
 }
 
 } // namespace
@@ -263,15 +322,26 @@ CREATE TABLE IF NOT EXISTS analysis_report (
     weather TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_reservation_active_pile
+ON reservation(pile_id) WHERE status='有效';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_reservation_active_user
+ON reservation(user_id) WHERE status='有效';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_order_open_user
+ON charge_order(user_id) WHERE status IN ('充电中','待结算');
+CREATE UNIQUE INDEX IF NOT EXISTS uq_order_charging_pile
+ON charge_order(pile_id) WHERE status='充电中';
 DROP INDEX IF EXISTS idx_order_created_at;
 DROP INDEX IF EXISTS idx_recharge_user_created;
+DROP INDEX IF EXISTS idx_order_status;
+DROP INDEX IF EXISTS idx_reservation_user_status;
 CREATE INDEX IF NOT EXISTS idx_order_user_status ON charge_order(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_order_user_id ON charge_order(user_id, id DESC);
-CREATE INDEX IF NOT EXISTS idx_order_status ON charge_order(status);
+CREATE INDEX IF NOT EXISTS idx_order_status_start ON charge_order(status, start_time);
 CREATE INDEX IF NOT EXISTS idx_order_start ON charge_order(start_time);
 CREATE INDEX IF NOT EXISTS idx_pile_station ON pile(station_id);
 CREATE INDEX IF NOT EXISTS idx_pile_status ON pile(status);
-CREATE INDEX IF NOT EXISTS idx_reservation_user_status ON reservation(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_reservation_user_status_expire_id
+ON reservation(user_id, status, expire_at, id DESC);
 CREATE INDEX IF NOT EXISTS idx_reservation_pile_status ON reservation(pile_id, status);
 CREATE INDEX IF NOT EXISTS idx_reservation_status_expire ON reservation(status, expire_at);
 CREATE INDEX IF NOT EXISTS idx_station_review_station ON station_review(station_id, id DESC);
@@ -306,9 +376,20 @@ QSqlDatabase Database::conn()
         qCritical().noquote() << "Create SQLite connection failed: QSQLITE driver is unavailable";
         return db;
     }
-    if (!db.isOpen() && !db.open())
-        qCritical().noquote() << "Open SQLite database failed:" << db.lastError().text()
-                              << "database path:" << path_;
+    bool openedNow = false;
+    if (!db.isOpen()) {
+        if (!db.open()) {
+            qCritical().noquote() << "Open SQLite database failed:" << db.lastError().text()
+                                  << "database path:" << path_;
+            return db;
+        }
+        openedNow = true;
+    }
+    if (openedNow
+        && (!execSql(db, QStringLiteral("PRAGMA foreign_keys = ON"), QStringLiteral("Enable foreign keys"))
+            || !execSql(db, QStringLiteral("PRAGMA busy_timeout = 5000"), QStringLiteral("Set busy timeout")))) {
+        db.close();
+    }
     return db;
 }
 
@@ -323,15 +404,20 @@ bool Database::open()
     QSqlDatabase db = conn();
     if (!db.isValid() || !db.isOpen())
         return false;
-    if (!execSql(db, QStringLiteral("PRAGMA foreign_keys = ON"), QStringLiteral("Enable foreign keys"))
-        || !execSql(db, QStringLiteral("PRAGMA busy_timeout = 5000"), QStringLiteral("Set busy timeout"))
-        || !execSql(db, QStringLiteral("PRAGMA journal_mode = WAL"), QStringLiteral("Enable WAL mode"))) {
+    if (!execSql(db, QStringLiteral("PRAGMA journal_mode = WAL"), QStringLiteral("Enable WAL mode"))) {
         return false;
     }
     const QStringList stmts = QString::fromUtf8(kSchema).split(QLatin1Char(';'));
+    bool uniquenessValidated = false;
     for (int i = 0; i < stmts.size(); ++i) {
         const QString &s = stmts.at(i);
         const QString t = s.trimmed();
+        if (!uniquenessValidated
+            && t.startsWith(QLatin1String("CREATE UNIQUE INDEX IF NOT EXISTS uq_"))) {
+            if (!validateBusinessUniqueness(db))
+                return false;
+            uniquenessValidated = true;
+        }
         if (!t.isEmpty()
             && !execSql(db, t, QStringLiteral("Initialize schema statement %1").arg(i + 1))) {
             return false;
@@ -512,8 +598,11 @@ bool Database::open()
         return false;
     }
     if (reviewDocCount == 0) {
-        const auto rows = query("SELECT user_id, station_id, pile_id, score, comment, created_at FROM station_review");
-        for (const auto &r : rows) {
+        const auto reviews = queryChecked(
+            "SELECT user_id, station_id, pile_id, score, comment, created_at FROM station_review");
+        if (!reviews.ok)
+            return false;
+        for (const auto &r : reviews.rows) {
             QJsonObject doc{
                 {"schema", QStringLiteral("chargehub.review.v1")},
                 {"userId", r.value("user_id").toInt()},
@@ -524,10 +613,13 @@ bool Database::open()
                 {"createdAt", r.value("created_at").toString()},
                 {"updatedAt", r.value("created_at").toString()},
             };
-            execute("INSERT INTO review_doc(pile_id,user_id,doc,created_at) VALUES(?,?,?,?)",
-                    {r.value("pile_id"), r.value("user_id"),
-                     QString::fromUtf8(QJsonDocument(doc).toJson(QJsonDocument::Compact)),
-                     r.value("created_at")});
+            const auto inserted = executeChecked(
+                "INSERT INTO review_doc(pile_id,user_id,doc,created_at) VALUES(?,?,?,?)",
+                {r.value("pile_id"), r.value("user_id"),
+                 QString::fromUtf8(QJsonDocument(doc).toJson(QJsonDocument::Compact)),
+                 r.value("created_at")});
+            if (!inserted.ok || inserted.insertId <= 0)
+                return false;
         }
     }
 
@@ -538,36 +630,47 @@ bool Database::open()
     }
     if (historySeedCount == 0) {
         const QString now = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
-        const auto piles = query("SELECT id, station_id, power_kw FROM pile WHERE status!='故障'");
-        const auto prices = query("SELECT id, price_per_kwh FROM station");
+        const auto pileRows = queryChecked("SELECT id, station_id, power_kw FROM pile WHERE status!='故障'");
+        const auto priceRows = queryChecked("SELECT id, price_per_kwh FROM station");
+        if (!pileRows.ok || !priceRows.ok)
+            return false;
         QHash<int, double> priceMap;
-        for (const auto &s : prices)
+        for (const auto &s : priceRows.rows)
             priceMap.insert(s.value("id").toInt(), s.value("price_per_kwh").toDouble());
-        if (!piles.isEmpty()) {
+        if (!pileRows.rows.isEmpty()) {
             int oid = 1;
             for (int day = 14; day >= 1; --day) {
                 const int n = 6 + (day % 5);
                 for (int k = 0; k < n; ++k) {
-                    const auto &pile = piles[(day * 7 + k) % piles.size()];
+                    const auto &pile = pileRows.rows[(day * 7 + k) % pileRows.rows.size()];
                     const int minutes = 20 + ((day + k) % 6) * 10;
                     const QDateTime start = QDateTime::currentDateTime().addDays(-day).addSecs(-((8 + k) * 3600));
                     const double energy = qRound(pile.value("power_kw").toDouble() * (minutes / 60.0) * 1000) / 1000.0;
                     const double amount = qRound(energy * priceMap.value(pile.value("station_id").toInt(), 1.3) * 100) / 100.0;
                     const QString no = QString("CH%1%2").arg(start.toString("yyyyMMdd")).arg(oid, 5, 10, QChar('0'));
-                    execute(
+                    const auto inserted = executeChecked(
                         "INSERT INTO charge_order(order_no,user_id,pile_id,status,start_time,end_time,energy_kwh,amount,created_at) "
                         "VALUES(?,?,?,?,?,?,?,?,?)",
                         {no, 1 + (k % 3), pile.value("id"), QString::fromUtf8("已完成"),
                          start.toString("yyyy-MM-dd HH:mm:ss"),
                          start.addSecs(minutes * 60).toString("yyyy-MM-dd HH:mm:ss"),
                          energy, amount, start.toString("yyyy-MM-dd HH:mm:ss")});
-                    execute("UPDATE pile SET total_charge_count=total_charge_count+1, total_charge_minutes=total_charge_minutes+? WHERE id=?",
-                            {minutes, pile.value("id")});
+                    if (!inserted.ok || inserted.insertId <= 0)
+                        return false;
+                    const auto updated = executeChecked(
+                        "UPDATE pile SET total_charge_count=total_charge_count+1, "
+                        "total_charge_minutes=total_charge_minutes+? WHERE id=?",
+                        {minutes, pile.value("id")});
+                    if (!updated.ok || updated.rowsAffected != 1)
+                        return false;
                     ++oid;
                 }
             }
-            execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
-                    {"system", "SEED_HISTORY", "orders", QString::fromUtf8("成功"), now});
+            const auto audit = executeChecked(
+                "INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
+                {"system", "SEED_HISTORY", "orders", QString::fromUtf8("成功"), now});
+            if (!audit.ok || audit.insertId <= 0)
+                return false;
         }
     }
 
@@ -578,18 +681,24 @@ bool Database::open()
     }
     if (forecastCount == 0) {
         const QString now = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
-        const auto stations = query("SELECT id FROM station");
-        for (const auto &s : stations) {
-            const auto piles = query("SELECT status FROM pile WHERE station_id=?", {s.value("id")});
+        const auto stations = queryChecked("SELECT id FROM station");
+        if (!stations.ok)
+            return false;
+        for (const auto &s : stations.rows) {
+            const auto piles = queryChecked("SELECT status FROM pile WHERE station_id=?", {s.value("id")});
+            if (!piles.ok)
+                return false;
             int idle = 0;
-            for (const auto &p : piles)
+            for (const auto &p : piles.rows)
                 if (p.value("status").toString() == QString::fromUtf8("闲置"))
                     ++idle;
             const int horizons[] = {1, 6, 24};
             for (int h : horizons) {
-                execute(
+                const auto inserted = executeChecked(
                     "INSERT INTO load_forecast(station_id,horizon_hours,pred_kwh,pred_idle,peak_hour,created_at) VALUES(?,?,?,?,?,?)",
                     {s.value("id"), h, idle * 18.0 * h / 24.0, qMax(0, idle - h / 8), QStringLiteral("18:00"), now});
+                if (!inserted.ok || inserted.insertId <= 0)
+                    return false;
             }
         }
     }
@@ -598,29 +707,8 @@ bool Database::open()
 
 QVector<QVariantMap> Database::query(const QString &sql, const QVariantList &args)
 {
-    QMutexLocker locker(&mutex_);
-    QSqlDatabase db = conn();
-    if (!db.isValid() || !db.isOpen())
-        return {};
-    QSqlQuery q(db);
-    if (!prepareSql(q, sql, QStringLiteral("Prepare database query")))
-        return {};
-    for (const QVariant &a : args)
-        q.addBindValue(a);
-    if (!execPrepared(q, sql, QStringLiteral("Execute database query")))
-        return {};
-    QVector<QVariantMap> rows;
-    while (q.next()) {
-        QVariantMap row;
-        for (int i = 0; i < q.record().count(); ++i)
-            row.insert(q.record().fieldName(i), q.value(i));
-        rows.append(row);
-    }
-    if (q.lastError().isValid()) {
-        logSqlError(QStringLiteral("Read database query results"), q.lastError(), sql);
-        return {};
-    }
-    return rows;
+    const QueryResult result = queryChecked(sql, args);
+    return result.ok ? result.rows : QVector<QVariantMap>();
 }
 
 QVariantMap Database::one(const QString &sql, const QVariantList &args)
@@ -631,16 +719,121 @@ QVariantMap Database::one(const QString &sql, const QVariantList &args)
 
 int Database::execute(const QString &sql, const QVariantList &args)
 {
+    const WriteResult result = executeChecked(sql, args);
+    return result.ok ? int(result.insertId) : 0;
+}
+
+Database::QueryResult Database::queryChecked(const QString &sql, const QVariantList &args)
+{
     QMutexLocker locker(&mutex_);
     QSqlDatabase db = conn();
-    if (!db.isValid() || !db.isOpen())
-        return 0;
+    QueryResult result;
+    if (!db.isValid() || !db.isOpen()) {
+        result.errorKind = db.lastError().isValid() ? errorKindFor(db.lastError()) : ErrorKind::Other;
+        return result;
+    }
     QSqlQuery q(db);
-    if (!prepareSql(q, sql, QStringLiteral("Prepare database command")))
-        return 0;
+    if (!prepareSql(q, sql, QStringLiteral("Prepare database query"))) {
+        result.errorKind = errorKindFor(q.lastError());
+        return result;
+    }
     for (const QVariant &a : args)
         q.addBindValue(a);
-    if (!execPrepared(q, sql, QStringLiteral("Execute database command")))
-        return 0;
-    return q.lastInsertId().toInt();
+    if (!execPrepared(q, sql, QStringLiteral("Execute database query"))) {
+        result.errorKind = errorKindFor(q.lastError());
+        return result;
+    }
+    while (q.next()) {
+        QVariantMap row;
+        for (int i = 0; i < q.record().count(); ++i)
+            row.insert(q.record().fieldName(i), q.value(i));
+        result.rows.append(row);
+    }
+    if (q.lastError().isValid()) {
+        logSqlError(QStringLiteral("Read database query results"), q.lastError(), sql);
+        result.rows.clear();
+        result.errorKind = errorKindFor(q.lastError());
+        return result;
+    }
+    result.ok = true;
+    result.errorKind = ErrorKind::None;
+    return result;
+}
+
+Database::WriteResult Database::executeChecked(const QString &sql, const QVariantList &args)
+{
+    QMutexLocker locker(&mutex_);
+    QSqlDatabase db = conn();
+    WriteResult result;
+    if (!db.isValid() || !db.isOpen()) {
+        result.errorKind = db.lastError().isValid() ? errorKindFor(db.lastError()) : ErrorKind::Other;
+        return result;
+    }
+    QSqlQuery q(db);
+    if (!prepareSql(q, sql, QStringLiteral("Prepare database command"))) {
+        result.errorKind = errorKindFor(q.lastError());
+        return result;
+    }
+    for (const QVariant &a : args)
+        q.addBindValue(a);
+    if (!execPrepared(q, sql, QStringLiteral("Execute database command"))) {
+        result.errorKind = errorKindFor(q.lastError());
+        return result;
+    }
+    result.ok = true;
+    result.rowsAffected = q.numRowsAffected();
+    const QVariant insertId = q.lastInsertId();
+    result.insertId = insertId.isValid() ? insertId.toLongLong() : 0;
+    result.errorKind = ErrorKind::None;
+    return result;
+}
+
+bool Database::runTransaction(const std::function<bool()> &operation, ErrorKind *errorKind)
+{
+    QMutexLocker locker(&mutex_);
+    if (errorKind)
+        *errorKind = ErrorKind::None;
+
+    QSqlDatabase db = conn();
+    if (!db.isValid() || !db.isOpen()) {
+        if (errorKind)
+            *errorKind = db.lastError().isValid() ? errorKindFor(db.lastError()) : ErrorKind::Other;
+        return false;
+    }
+
+    const QString beginSql = QStringLiteral("BEGIN IMMEDIATE");
+    QSqlQuery begin(db);
+    if (!execSql(begin, beginSql, QStringLiteral("Begin database transaction"))) {
+        if (errorKind)
+            *errorKind = errorKindFor(begin.lastError());
+        return false;
+    }
+
+    bool operationOk = false;
+    try {
+        operationOk = operation();
+    } catch (...) {
+        if (errorKind)
+            *errorKind = ErrorKind::Other;
+        qCritical() << "Database transaction callback raised an exception";
+    }
+
+    if (!operationOk) {
+        QSqlQuery rollback(db);
+        execSql(rollback, QStringLiteral("ROLLBACK"), QStringLiteral("Rollback database transaction"));
+        if (errorKind && *errorKind == ErrorKind::None)
+            *errorKind = ErrorKind::Other;
+        return false;
+    }
+
+    const QString commitSql = QStringLiteral("COMMIT");
+    QSqlQuery commit(db);
+    if (execSql(commit, commitSql, QStringLiteral("Commit database transaction")))
+        return true;
+
+    if (errorKind)
+        *errorKind = errorKindFor(commit.lastError());
+    QSqlQuery rollback(db);
+    execSql(rollback, QStringLiteral("ROLLBACK"), QStringLiteral("Rollback failed commit"));
+    return false;
 }

@@ -172,15 +172,26 @@ CREATE TABLE IF NOT EXISTS analysis_report (
     created_at    TEXT    NOT NULL
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS uq_reservation_active_pile
+ON reservation(pile_id) WHERE status='有效';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_reservation_active_user
+ON reservation(user_id) WHERE status='有效';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_order_open_user
+ON charge_order(user_id) WHERE status IN ('充电中','待结算');
+CREATE UNIQUE INDEX IF NOT EXISTS uq_order_charging_pile
+ON charge_order(pile_id) WHERE status='充电中';
 DROP INDEX IF EXISTS idx_order_created_at;
 DROP INDEX IF EXISTS idx_recharge_user_created;
+DROP INDEX IF EXISTS idx_order_status;
+DROP INDEX IF EXISTS idx_reservation_user_status;
 CREATE INDEX IF NOT EXISTS idx_order_user_status ON charge_order(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_order_user_id ON charge_order(user_id, id DESC);
-CREATE INDEX IF NOT EXISTS idx_order_status ON charge_order(status);
+CREATE INDEX IF NOT EXISTS idx_order_status_start ON charge_order(status, start_time);
 CREATE INDEX IF NOT EXISTS idx_order_start ON charge_order(start_time);
 CREATE INDEX IF NOT EXISTS idx_pile_station ON pile(station_id);
 CREATE INDEX IF NOT EXISTS idx_pile_status ON pile(status);
-CREATE INDEX IF NOT EXISTS idx_reservation_user_status ON reservation(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_reservation_user_status_expire_id
+ON reservation(user_id, status, expire_at, id DESC);
 CREATE INDEX IF NOT EXISTS idx_reservation_pile_status ON reservation(pile_id, status);
 CREATE INDEX IF NOT EXISTS idx_reservation_status_expire ON reservation(status, expire_at);
 CREATE INDEX IF NOT EXISTS idx_station_review_station ON station_review(station_id, id DESC);
