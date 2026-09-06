@@ -2077,15 +2077,16 @@ void UserWindow::onResp(QJsonObject obj)
         renderOrders(data.value("orders").toArray());
     } else if (type == "LIST_RESERVATIONS") {
         renderReservations(data.value("reservations").toArray());
-    } else if (type == "RECHARGE" || type == "UPDATE_PROFILE") {
+    } else if (type == "RECHARGE") {
+        QMessageBox::information(this, u8("充值成功"),
+                                 u8("流水号 %1\n金额 ¥%2")
+                                     .arg(data.value("tradeNo").toString())
+                                     .arg(data.value("amount").toDouble(), 0, 'f', 2));
+        // applyUser() calls refreshMe(), which requests LIST_RECHARGE once when logged in.
         applyUser(data.value("user").toObject());
-        if (type == "RECHARGE")
-            QMessageBox::information(this, u8("充值成功"),
-                                     u8("流水号 %1\n金额 ¥%2")
-                                         .arg(data.value("tradeNo").toString())
-                                         .arg(data.value("amount").toDouble(), 0, 'f', 2));
-        else
-            QMessageBox::information(this, u8("ChargeHub"), obj.value("message").toString());
+    } else if (type == "UPDATE_PROFILE") {
+        applyUser(data.value("user").toObject());
+        QMessageBox::information(this, u8("ChargeHub"), obj.value("message").toString());
     } else if (type == "LIST_RECHARGE") {
         renderRecharge(data.value("records").toArray());
     }
