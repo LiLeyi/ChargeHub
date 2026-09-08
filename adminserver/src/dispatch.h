@@ -3,37 +3,38 @@
 
 /**
  * @file dispatch.h
- * @brief 全系统唯一业务层：登录、找桩、充电、结算、预约、资费、运营操作。
+ * @brief 业务门面：组合请求路由、会话服务和现有领域业务。
  *
  * 【职责】所有会改余额 / 订单 / 桩状态的规则都在这里。界面和 Socket 只把参数传进来。
  * 【原理】
- *   - 用户端：TcpServer 拆包后调用 handle()，按 JSON 的 type 分发到 startCharge 等。
+ *   - 用户端：TcpServer 拆包后调用 handle()，由 RequestDispatcher 路由和鉴权。
  *   - 管理端：MainWindow 同进程直接调 listPiles / forceSettleOrder，不走 8888。
  *   - 写库一律 Database::transaction，失败整笔回滚。
  *   - 金额内部用「分」，回包仍是元，旧客户端不用改。
- * 【协作】依赖 Database；被 TcpServer、MainWindow 调用。不依赖 Qt 界面类。
+ * 【协作】依赖 Database、SessionService、RequestDispatcher；被 TcpServer、MainWindow 调用。
  * 【详见】docs/模块与协作说明.md
  */
 
-#include "database.h"
+#include <memory>
 
-#include <QHash>
 #include <QJsonObject>
-#include <QMutex>
-#include <QPair>
 #include <QString>
 #include <QVariantMap>
 #include <QVector>
 
+class Database;
+class RequestDispatcher;
+class SessionService;
+
 class Dispatch {
 public:
-    /** 记住 Database*，并 loadSessions() 把未过期 token 读回内存。 */
+    /** 组合数据库、会话服务和请求路由。 */
     explicit Dispatch(Database *db);
+    ~Dispatch();
 
     /**
      * 用户端总入口。TcpServer::incomingConnection 每收到一帧就调用。
-     * 流程：写操作查 8 秒幂等缓存（token|type|seq）→ LOGIN/REGISTER 或 requireUser
-     *       → 对应业务函数 → ok/fail。
+     * 流程：RequestDispatcher 查幂等缓存、鉴权并调用注册的领域处理函数。
      * @param req  已拆好的 JSON：type / seq / token / data
      * @return     统一回包 {type,seq,code,message,data}，code=0 成功
      */
@@ -131,7 +132,7 @@ public:
 
     /**
      * token → 用户 id。TcpServer 绑定连接、推送时用。
-     * 无效、过期返回 0。与 userIdByToken 同类，对外给接入层。
+     * 无效、过期返回 0。实现委托给 SessionService。
      */
     int userIdOfToken(const QString &token) const;
 
@@ -180,39 +181,11 @@ public:
 
 private:
     Database *db_;
-    mutable QMutex sessionMutex_;
-    mutable QHash<QString, int> tokenUser_;      ///< token → userId
-    mutable QHash<QString, qint64> tokenAt_;     ///< token 内存签发时间
-    mutable QHash<QString, qint64> tokenDbAt_;   ///< 与 session 表对齐用
-    mutable QMutex idemMutex_;
-    QHash<QString, QPair<qint64, QJsonObject>> idemCache_; ///< 写操作 8 秒回放
+    std::unique_ptr<SessionService> sessions_;
+    std::unique_ptr<RequestDispatcher> requestDispatcher_;
 
-    /** 进程启动：从 session 表恢复 30 分钟内未过期的 token 到内存。 */
-    void loadSessions();
-    /** 把一对 token/userId 写入或更新 session 表。 */
-    void persistSession(const QString &token, int userId) const;
-    /** 从 session 表删除该 token。 */
-    void forgetSession(const QString &token) const;
-    /** 签发随机 token，记内存并 persistSession，TTL 30 分钟。登录/注册成功时调用。 */
-    QString issueToken(int userId);
-    /** 内存+过期校验。过期则删表。无效返回 0。 */
-    int userIdByToken(const QString &token) const;
-    /** 冻结或注销：作废该用户全部 token（内存 + session 表）。 */
-    void dropUser(int userId);
-
-    /** 成功回包：code=0，带 message 与 data。不写库。 */
-    QJsonObject ok(const QString &type, int seq, const QString &msg, const QJsonObject &data) const;
-    /** 失败回包：code 为 HTTP 风格业务码（401/403/409…）。不写库。 */
-    QJsonObject fail(const QString &type, int seq, int code, const QString &msg) const;
-
-    /**
-     * 校验登录态：token 有效、用户存在、未冻结、未注销。
-     * 成功返回 user 整行；失败 *err 填原因，返回空 map。
-     */
-    QVariantMap requireUser(const QString &token, QString *err) const;
-
-    /** 回给用户端的公开字段（id/手机/昵称/余额/头像），不含 password_hash。 */
-    QJsonObject publicUser(const QVariantMap &u) const;
+    /** 注册用户端协议路由，业务实现仍由各领域函数承接。 */
+    void registerRoutes();
 
     /**
      * 模拟充值。单笔 0~10000 元。事务：加 user.balance + 插 recharge_log。

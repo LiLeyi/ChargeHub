@@ -2,10 +2,14 @@
  * @file dispatch.cpp
  * @brief Dispatch 实现。头文件写清职责与调用关系；这里是具体校验和 SQL。
  *
- * 读代码顺序建议：handle → startCharge / stopCharge / settle → calcLive。
+ * 读代码顺序建议：registerRoutes → startCharge / stopCharge / settle → calcLive。
  * 金额 fenOf/moneyFen 保证接口仍是元。详见 docs/模块与协作说明.md
  */
 #include "dispatch.h"
+
+#include "database.h"
+#include "services/sessionservice.h"
+#include "transport/requestdispatcher.h"
 
 #include <algorithm>
 #include <QBuffer>
@@ -22,14 +26,7 @@
 #include <QJsonValue>
 #include <QMap>
 #include <QRegularExpression>
-#include <QUuid>
 #include <QtMath>
-
-/** 中国大陆手机号：1 开头，第二位 3–9。 */
-static QRegularExpression phoneRe()
-{
-    return QRegularExpression(QStringLiteral("^1[3-9][0-9]{9}$"));
-}
 
 /** 按星级和关键词做简易情感分析，只写评价表，不改订单。 */
 static QJsonObject analyzeReview(int score, const QString &text)
@@ -178,360 +175,108 @@ static GeoHit resolveAddress(const QString &raw, const QVector<QVariantMap> &sta
     return best;
 }
 
-Dispatch::Dispatch(Database *db) : db_(db)
+namespace {
+ServiceResult legacyResult(QJsonObject body, const QString &message = QStringLiteral("ok"),
+                           int defaultErrorCode = 400)
 {
-    loadSessions();
+    if (body.contains("error"))
+        return ServiceResult::fail(body.value("errorCode").toInt(defaultErrorCode),
+                                   body.value("error").toString());
+    body.remove("errorCode");
+    return ServiceResult::ok(body, message);
+}
 }
 
-/** 统一成功信封，不写库。 */
-QJsonObject Dispatch::ok(const QString &type, int seq, const QString &msg, const QJsonObject &data) const
+Dispatch::Dispatch(Database *db)
+    : db_(db),
+      sessions_(std::make_unique<SessionService>(db)),
+      requestDispatcher_(std::make_unique<RequestDispatcher>(sessions_.get()))
 {
-    return QJsonObject{{"type", type}, {"seq", seq}, {"code", 0}, {"message", msg}, {"data", data}};
+    registerRoutes();
 }
 
-/** 统一失败信封，不写库。 */
-QJsonObject Dispatch::fail(const QString &type, int seq, int code, const QString &msg) const
+Dispatch::~Dispatch() = default;
+
+void Dispatch::registerRoutes()
 {
-    return QJsonObject{{"type", type}, {"seq", seq}, {"code", code}, {"message", msg}, {"data", QJsonObject()}};
+    using SR = ServiceResult;
+    requestDispatcher_->addPublicRoute("LOGIN", [this](const QVariantMap &, const QJsonObject &data) {
+        return sessions_->login(data);
+    });
+    requestDispatcher_->addPublicRoute("REGISTER", [this](const QVariantMap &, const QJsonObject &data) {
+        return sessions_->registerUser(data);
+    });
+
+    const auto add = [this](const QString &type, bool mutating,
+                            const RequestDispatcher::Handler &handler) {
+        requestDispatcher_->addAuthenticatedRoute(type, mutating, handler);
+    };
+    add("UPDATE_PROFILE", false, [this](const QVariantMap &u, const QJsonObject &d) {
+        return legacyResult(updateProfile(u, d), QString::fromUtf8("保存成功"));
+    });
+    add("RECHARGE", true, [this](const QVariantMap &u, const QJsonObject &d) {
+        return legacyResult(recharge(u, d), QString::fromUtf8("充值成功"));
+    });
+    add("QUERY_STATIONS", false, [this](const QVariantMap &u, const QJsonObject &d) {
+        return SR::ok(queryStations(u, d));
+    });
+    add("CLOSE_ACCOUNT", false, [this](const QVariantMap &u, const QJsonObject &) {
+        return legacyResult(closeAccount(u), QString::fromUtf8("账号已注销，历史订单与评价已留档"));
+    });
+    add("QUERY_PILES", false, [this](const QVariantMap &u, const QJsonObject &d) {
+        return legacyResult(queryPiles(u, d), QStringLiteral("ok"), 404);
+    });
+    add("START_CHARGE", true, [this](const QVariantMap &u, const QJsonObject &d) {
+        return legacyResult(startCharge(u, d), QString::fromUtf8("充电已开始"));
+    });
+    add("CHARGE_STATUS", false, [this](const QVariantMap &u, const QJsonObject &) {
+        const QJsonObject body = chargeStatus(u);
+        return SR::ok(body, body.value("order").isNull() ? QString::fromUtf8("无进行中订单")
+                                                          : QStringLiteral("ok"));
+    });
+    add("STOP_CHARGE", true, [this](const QVariantMap &u, const QJsonObject &) {
+        return legacyResult(stopCharge(u), QString::fromUtf8("请结算订单"));
+    });
+    add("SETTLE_ORDER", true, [this](const QVariantMap &u, const QJsonObject &) {
+        return legacyResult(settle(u), QString::fromUtf8("结算成功"));
+    });
+    add("LIST_ORDERS", false, [this](const QVariantMap &u, const QJsonObject &) {
+        return SR::ok(listOrders(u));
+    });
+    add("LIST_RECHARGE", false, [this](const QVariantMap &u, const QJsonObject &) {
+        return SR::ok(listRecharge(u));
+    });
+    add("LIST_RESERVATIONS", false, [this](const QVariantMap &u, const QJsonObject &) {
+        return SR::ok(listReservations(u));
+    });
+    add("RESERVE_PILE", true, [this](const QVariantMap &u, const QJsonObject &d) {
+        return legacyResult(reservePile(u, d), QString::fromUtf8("预约成功，15分钟内有效"));
+    });
+    add("CANCEL_RESERVE", true, [this](const QVariantMap &u, const QJsonObject &) {
+        return legacyResult(cancelReserve(u), QString::fromUtf8("已取消预约"));
+    });
+    add("REVIEW_STATION", false, [this](const QVariantMap &u, const QJsonObject &d) {
+        QJsonObject body = reviewStation(u, d);
+        const QString message = body.value("updated").toBool()
+            ? QString::fromUtf8("已更新你对这根桩的评价") : QString::fromUtf8("评价已提交");
+        return legacyResult(body, message);
+    });
+    add("LIST_PILE_REVIEWS", false, [this](const QVariantMap &u, const QJsonObject &d) {
+        return legacyResult(listPileReviews(u, d), QStringLiteral("ok"), 404);
+    });
+    add("HEARTBEAT", false, [](const QVariantMap &, const QJsonObject &) {
+        return SR::ok();
+    });
 }
 
-/** 启动时把 session 表里 30 分钟内的 token 读回内存。 */
-void Dispatch::loadSessions()
+QJsonObject Dispatch::handle(const QJsonObject &request)
 {
-    const qint64 now = QDateTime::currentSecsSinceEpoch();
-    for (const auto &row : db_->query("SELECT token, user_id, updated_at FROM session")) {
-        const QDateTime at = QDateTime::fromString(row.value("updated_at").toString(), "yyyy-MM-dd HH:mm:ss");
-        if (!at.isValid() || at.secsTo(QDateTime::currentDateTime()) > 30 * 60) {
-            db_->execute("DELETE FROM session WHERE token=?", {row.value("token")});
-            continue;
-        }
-        const QString token = row.value("token").toString();
-        tokenUser_.insert(token, row.value("user_id").toInt());
-        tokenAt_.insert(token, at.toSecsSinceEpoch());
-        tokenDbAt_.insert(token, now);
-    }
+    return requestDispatcher_->handle(request);
 }
 
-/** 插入或更新 session 行，管理端重启后还能认。 */
-void Dispatch::persistSession(const QString &token, int userId) const
-{
-    db_->execute("INSERT OR REPLACE INTO session(token,user_id,updated_at) VALUES(?,?,?)",
-                 {token, userId, nowStr()});
-}
-
-/** 删除 session 表中这一枚 token。 */
-void Dispatch::forgetSession(const QString &token) const
-{
-    db_->execute("DELETE FROM session WHERE token=?", {token});
-}
-
-/** 随机 token 记内存并落库，TTL 30 分钟。 */
-QString Dispatch::issueToken(int userId)
-{
-    const QString token = QUuid::createUuid().toString().remove('{').remove('}').remove('-');
-    const qint64 now = QDateTime::currentSecsSinceEpoch();
-    {
-        QMutexLocker locker(&sessionMutex_);
-        tokenUser_.insert(token, userId);
-        tokenAt_.insert(token, now);
-        tokenDbAt_.insert(token, now);
-    }
-    persistSession(token, userId);
-    return token;
-}
-
-/** 内存查找；过期则删表并返回 0。 */
-int Dispatch::userIdByToken(const QString &token) const
-{
-    if (token.isEmpty())
-        return 0;
-    const qint64 now = QDateTime::currentSecsSinceEpoch();
-    int uid = 0;
-    bool needLoad = false;
-    bool expired = false;
-    bool persist = false;
-    {
-        QMutexLocker locker(&sessionMutex_);
-        if (!tokenUser_.contains(token))
-            needLoad = true;
-        else if (now - tokenAt_.value(token) > 30 * 60)
-            expired = true;
-        else {
-            tokenAt_.insert(token, now);
-            uid = tokenUser_.value(token);
-            if (now - tokenDbAt_.value(token) >= 300) {
-                tokenDbAt_.insert(token, now);
-                persist = true;
-            }
-        }
-    }
-    if (needLoad) {
-        const auto row = db_->one("SELECT user_id, updated_at FROM session WHERE token=?", {token});
-        if (row.isEmpty())
-            return 0;
-        const QDateTime at = QDateTime::fromString(row.value("updated_at").toString(), "yyyy-MM-dd HH:mm:ss");
-        if (!at.isValid() || at.secsTo(QDateTime::currentDateTime()) > 30 * 60) {
-            forgetSession(token);
-            return 0;
-        }
-        uid = row.value("user_id").toInt();
-        QMutexLocker locker(&sessionMutex_);
-        tokenUser_.insert(token, uid);
-        tokenAt_.insert(token, now);
-        tokenDbAt_.insert(token, now);
-        return uid;
-    }
-    if (expired) {
-        {
-            QMutexLocker locker(&sessionMutex_);
-            tokenUser_.remove(token);
-            tokenAt_.remove(token);
-            tokenDbAt_.remove(token);
-        }
-        forgetSession(token);
-        return 0;
-    }
-    if (persist)
-        persistSession(token, uid);
-    return uid;
-}
-
-/** 给 TcpServer 用的对外封装，无效为 0。 */
 int Dispatch::userIdOfToken(const QString &token) const
 {
-    return userIdByToken(token);
-}
-
-/** 冻结/注销：清掉该用户全部 token。 */
-void Dispatch::dropUser(int userId)
-{
-    QStringList tokens;
-    {
-        QMutexLocker locker(&sessionMutex_);
-        const auto keys = tokenUser_.keys();
-        for (const QString &k : keys) {
-            if (tokenUser_.value(k) == userId) {
-                tokens.append(k);
-                tokenUser_.remove(k);
-                tokenAt_.remove(k);
-                tokenDbAt_.remove(k);
-            }
-        }
-    }
-    for (const QString &k : tokens)
-        forgetSession(k);
-}
-
-/** token 有效且账号正常才返回用户行，否则 *err 说明原因。 */
-QVariantMap Dispatch::requireUser(const QString &token, QString *err) const
-{
-    const int uid = userIdByToken(token);
-    if (!uid) {
-        *err = QString::fromUtf8("登录已失效，请重新登录");
-        return {};
-    }
-    auto u = db_->one("SELECT * FROM user WHERE id=?", {uid});
-    if (u.isEmpty()) {
-        *err = QString::fromUtf8("登录已失效，请重新登录");
-        return {};
-    }
-    if (u.value("status").toString() == QString::fromUtf8("注销")) {
-        *err = QString::fromUtf8("账号已注销，历史数据已留档");
-        return {};
-    }
-    if (u.value("status").toString() == QString::fromUtf8("冻结")) {
-        *err = QString::fromUtf8("账号已冻结，请联系管理员");
-        return {};
-    }
-    return u;
-}
-
-/** 回给用户端的公开字段，不含密码哈希。 */
-QJsonObject Dispatch::publicUser(const QVariantMap &u) const
-{
-    QJsonObject o{
-        {"id", u.value("id").toInt()},
-        {"phone", u.value("phone").toString()},
-        {"nickname", u.value("nickname").toString()},
-        {"avatarPath", u.value("avatar_path").toString()},
-        {"hasAvatar", false},
-        {"balance", money(u.value("balance").toDouble())},
-        {"status", u.value("status").toString()},
-        {"createdAt", u.value("created_at").toString()},
-        {"address", u.value("address").toString()},
-        {"lat", u.contains("loc_lat") ? u.value("loc_lat").toDouble() : 39.9644},
-        {"lng", u.contains("loc_lng") ? u.value("loc_lng").toDouble() : 116.3473},
-        {"closeReason", u.value("close_reason").toString()},
-        {"closedAt", u.value("closed_at").toString()},
-    };
-    const auto av = db_->one("SELECT mime, data FROM user_avatar WHERE user_id=?", {u.value("id")});
-    if (!av.isEmpty() && !av.value("data").toByteArray().isEmpty()) {
-        o.insert("hasAvatar", true);
-        o.insert("avatarMime", av.value("mime").toString());
-        o.insert("avatarBase64", QString::fromLatin1(av.value("data").toByteArray().toBase64()));
-    }
-    return o;
-}
-
-/** 按 type 分发；写操作 8 秒内相同 token+type+seq 直接回上次结果。 */
-/** 用户端总入口：幂等缓存 → 登录/注册或鉴权 → 分发到具体业务。 */
-QJsonObject Dispatch::handle(const QJsonObject &req)
-{
-    const QString type = req.value("type").toString();
-    const int seq = req.value("seq").toInt();
-    const QJsonObject data = req.value("data").toObject();
-    const QString idemKey = req.value("token").toString() + QLatin1Char('|') + type + QLatin1Char('|')
-        + QString::number(seq);
-    const bool mutating = (type == "START_CHARGE" || type == "STOP_CHARGE" || type == "SETTLE_ORDER"
-                           || type == "RECHARGE" || type == "RESERVE_PILE" || type == "CANCEL_RESERVE");
-    if (mutating && !req.value("token").toString().isEmpty()) {
-        QMutexLocker locker(&idemMutex_);
-        const auto it = idemCache_.constFind(idemKey);
-        if (it != idemCache_.cend()
-            && QDateTime::currentSecsSinceEpoch() - it.value().first < 8)
-            return it.value().second;
-    }
-    if (type == "LOGIN") {
-        const QString phone = data.value("phone").toString().trimmed();
-        const QString pwd = data.value("password").toString();
-        if (!phoneRe().match(phone).hasMatch())
-            return fail(type, seq, 400, QString::fromUtf8("请输入正确的手机号格式"));
-        if (pwd.size() < 6 || pwd.size() > 20)
-            return fail(type, seq, 400, QString::fromUtf8("密码长度须为 6~20 位"));
-        auto user = db_->one("SELECT * FROM user WHERE phone=?", {phone});
-        const QString hash = QString::fromLatin1(
-            QCryptographicHash::hash(pwd.toUtf8(), QCryptographicHash::Sha256).toHex());
-        if (user.isEmpty() || user.value("password_hash").toString() != hash)
-            return fail(type, seq, 401, QString::fromUtf8("账号或密码错误"));
-        if (user.value("status").toString() == QString::fromUtf8("注销"))
-            return fail(type, seq, 403, QString::fromUtf8("账号已注销，历史数据已留档，无法登录"));
-        if (user.value("status").toString() == QString::fromUtf8("冻结"))
-            return fail(type, seq, 403, QString::fromUtf8("账号已冻结，请联系管理员"));
-        const QString token = issueToken(user.value("id").toInt());
-        return ok(type, seq, QString::fromUtf8("登录成功"),
-                  QJsonObject{{"user", publicUser(user)}, {"token", token}, {"isNew", false}});
-    }
-    if (type == "REGISTER") {
-        const QString phone = data.value("phone").toString().trimmed();
-        const QString pwd = data.value("password").toString();
-        if (!phoneRe().match(phone).hasMatch())
-            return fail(type, seq, 400, QString::fromUtf8("请输入正确的手机号格式"));
-        if (pwd.size() < 6 || pwd.size() > 20)
-            return fail(type, seq, 400, QString::fromUtf8("密码长度须为 6~20 位"));
-        if (!db_->one("SELECT id FROM user WHERE phone=?", {phone}).isEmpty()) {
-            auto old = db_->one("SELECT status FROM user WHERE phone=?", {phone});
-            if (old.value("status").toString() == QString::fromUtf8("注销"))
-                return fail(type, seq, 409, QString::fromUtf8("该手机号已注销留档，无法再次注册，请联系管理员"));
-            return fail(type, seq, 409, QString::fromUtf8("该账号已注册"));
-        }
-        const QString hash = QString::fromLatin1(
-            QCryptographicHash::hash(pwd.toUtf8(), QCryptographicHash::Sha256).toHex());
-        const QString nick = QString::fromUtf8("用户") + phone.right(4);
-        const int uid = db_->execute(
-            "INSERT INTO user(phone,nickname,avatar_path,password_hash,balance,status,created_at) VALUES(?,?,?,?,?,?,?)",
-            {phone, nick, "", hash, 0.0, QString::fromUtf8("正常"), nowStr()});
-        auto user = db_->one("SELECT * FROM user WHERE id=?", {uid});
-        const QString token = issueToken(uid);
-        return ok(type, seq, QString::fromUtf8("注册成功"),
-                  QJsonObject{{"user", publicUser(user)}, {"token", token}, {"isNew", true}});
-    }
-    QString err;
-    const auto user = requireUser(req.value("token").toString(), &err);
-    if (user.isEmpty())
-        return fail(type, seq,
-                     (err.contains(QString::fromUtf8("冻结")) || err.contains(QString::fromUtf8("注销"))) ? 403 : 401,
-                     err);
-
-    QJsonObject body;
-    QString message = "ok";
-    if (type == "UPDATE_PROFILE") {
-        body = updateProfile(user, data);
-        if (body.contains("error"))
-            return fail(type, seq, 400, body.value("error").toString());
-        message = QString::fromUtf8("保存成功");
-    } else if (type == "RECHARGE") {
-        body = recharge(user, data);
-        if (body.contains("error"))
-            return fail(type, seq, 400, body.value("error").toString());
-        message = QString::fromUtf8("充值成功");
-    } else if (type == "QUERY_STATIONS") {
-        body = queryStations(user, data);
-    } else if (type == "CLOSE_ACCOUNT") {
-        body = closeAccount(user);
-        if (body.contains("error"))
-            return fail(type, seq, body.value("errorCode").toInt(400), body.value("error").toString());
-        message = QString::fromUtf8("账号已注销，历史订单与评价已留档");
-    } else if (type == "QUERY_PILES") {
-        body = queryPiles(user, data);
-        if (body.contains("error"))
-            return fail(type, seq, 404, body.value("error").toString());
-    } else if (type == "START_CHARGE") {
-        body = startCharge(user, data);
-        if (body.contains("errorCode"))
-            return fail(type, seq, body.value("errorCode").toInt(), body.value("error").toString());
-        message = QString::fromUtf8("充电已开始");
-    } else if (type == "CHARGE_STATUS") {
-        body = chargeStatus(user);
-        message = body.value("order").isNull() ? QString::fromUtf8("无进行中订单") : "ok";
-    } else if (type == "STOP_CHARGE") {
-        body = stopCharge(user);
-        if (body.contains("errorCode"))
-            return fail(type, seq, body.value("errorCode").toInt(), body.value("error").toString());
-        message = QString::fromUtf8("请结算订单");
-    } else if (type == "SETTLE_ORDER") {
-        body = settle(user);
-        if (body.contains("errorCode"))
-            return fail(type, seq, body.value("errorCode").toInt(), body.value("error").toString());
-        message = QString::fromUtf8("结算成功");
-    } else if (type == "LIST_ORDERS") {
-        body = listOrders(user);
-    } else if (type == "LIST_RECHARGE") {
-        body = listRecharge(user);
-    } else if (type == "LIST_RESERVATIONS") {
-        body = listReservations(user);
-    } else if (type == "RESERVE_PILE") {
-        body = reservePile(user, data);
-        if (body.contains("errorCode"))
-            return fail(type, seq, body.value("errorCode").toInt(), body.value("error").toString());
-        message = QString::fromUtf8("预约成功，15分钟内有效");
-    } else if (type == "CANCEL_RESERVE") {
-        body = cancelReserve(user);
-        if (body.contains("errorCode"))
-            return fail(type, seq, body.value("errorCode").toInt(), body.value("error").toString());
-        message = QString::fromUtf8("已取消预约");
-    } else if (type == "REVIEW_STATION") {
-        body = reviewStation(user, data);
-        if (body.contains("error"))
-            return fail(type, seq, 400, body.value("error").toString());
-        message = body.value("updated").toBool() ? QString::fromUtf8("已更新你对这根桩的评价")
-                                                 : QString::fromUtf8("评价已提交");
-    } else if (type == "LIST_PILE_REVIEWS") {
-        body = listPileReviews(user, data);
-        if (body.contains("error"))
-            return fail(type, seq, 404, body.value("error").toString());
-        message = "ok";
-    } else if (type == "HEARTBEAT") {
-        body = QJsonObject();
-    } else {
-        return fail(type, seq, 400, QString::fromUtf8("未知请求类型"));
-    }
-    body.remove("error");
-    body.remove("errorCode");
-    const QJsonObject resp = ok(type, seq, message, body);
-    if (mutating && !req.value("token").toString().isEmpty()) {
-        QMutexLocker locker(&idemMutex_);
-        idemCache_.insert(idemKey, {QDateTime::currentSecsSinceEpoch(), resp});
-        if (idemCache_.size() > 200) {
-            const qint64 cut = QDateTime::currentSecsSinceEpoch() - 8;
-            for (auto it = idemCache_.begin(); it != idemCache_.end(); ) {
-                if (it.value().first < cut)
-                    it = idemCache_.erase(it);
-                else
-                    ++it;
-            }
-        }
-    }
-    return resp;
+    return sessions_->userIdOfToken(token);
 }
 
 /** 改昵称和/或头像（JPEG BLOB）；clearAvatar 则删 user_avatar。 */
@@ -575,7 +320,7 @@ QJsonObject Dispatch::updateProfile(const QVariantMap &user, const QJsonObject &
                      {addr, hit.lat, hit.lng, uid});
     }
     auto u = db_->one("SELECT * FROM user WHERE id=?", {uid});
-    return QJsonObject{{"user", publicUser(u)}};
+    return QJsonObject{{"user", sessions_->publicUser(u)}};
 }
 
 /** 模拟充值，单笔 ≤ 10000 元，内部按分入账。 */
@@ -602,7 +347,7 @@ QJsonObject Dispatch::recharge(const QVariantMap &user, const QJsonObject &data)
     }
     const QString tradeNo = QString("RC%1").arg(logId, 8, 10, QChar('0'));
     auto u = db_->one("SELECT * FROM user WHERE id=?", {user.value("id")});
-    return QJsonObject{{"user", publicUser(u)}, {"tradeNo", tradeNo}, {"amount", add}};
+    return QJsonObject{{"user", sessions_->publicUser(u)}, {"tradeNo", tradeNo}, {"amount", add}};
 }
 
 /** 按地址关键字或半径列附近电站，只读 station。 */
@@ -744,7 +489,7 @@ QJsonObject Dispatch::closeAccount(const QVariantMap &user)
     db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
                  {user.value("phone").toString(), QString::fromUtf8("用户注销"),
                   QString("uid=%1").arg(uid), QString::fromUtf8("留档禁用"), t});
-    dropUser(uid);
+    sessions_->dropUser(uid);
     return QJsonObject{{"closed", true}, {"userId", uid}};
 }
 
@@ -1036,7 +781,8 @@ QJsonObject Dispatch::settle(const QVariantMap &userIn)
     auto pile = db_->one("SELECT * FROM pile WHERE id=?", {order.value("pile_id")});
     auto station = db_->one("SELECT * FROM station WHERE id=?", {pile.value("station_id")});
     auto live = calcLive(order, pile, station);
-    return QJsonObject{{"order", publicOrder(order, pile, station, live)}, {"user", publicUser(user)}};
+    return QJsonObject{{"order", publicOrder(order, pile, station, live)},
+                       {"user", sessions_->publicUser(user)}};
 }
 
 /** 只查 admin 表，SHA256 比对；失败文案统一「账号或密码错误」。 */
@@ -1179,7 +925,7 @@ void Dispatch::freezeUser(int userId, bool freeze)
             stopCharge(u);
         db_->execute("UPDATE user SET status=?, close_reason=?, closed_at=? WHERE id=?",
                      {QString::fromUtf8("冻结"), QString::fromUtf8("管理员冻结"), nowStr(), userId});
-        dropUser(userId);
+        sessions_->dropUser(userId);
         db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
                      {"admin", QString::fromUtf8("冻结用户"), u.value("phone"), QString::fromUtf8("成功"), nowStr()});
     } else {

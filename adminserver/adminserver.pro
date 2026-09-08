@@ -9,6 +9,8 @@ INCLUDEPATH += $$PWD/src $$PWD/../common
 SOURCES += \
     src/main.cpp \
     src/database.cpp \
+    src/services/sessionservice.cpp \
+    src/transport/requestdispatcher.cpp \
     src/dispatch.cpp \
     src/tcpserver.cpp \
     src/chartwidget.cpp \
@@ -17,6 +19,9 @@ SOURCES += \
 
 HEADERS += \
     src/database.h \
+    src/services/sessionservice.h \
+    src/transport/serviceresult.h \
+    src/transport/requestdispatcher.h \
     src/dispatch.h \
     src/tcpserver.h \
     src/chartwidget.h \
