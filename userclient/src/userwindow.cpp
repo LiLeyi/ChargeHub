@@ -49,6 +49,19 @@
 
 static QString u8(const char *s) { return QString::fromUtf8(s); }
 
+// 计算两点间距离（公里）
+static double haversine(double lat1, double lng1, double lat2, double lng2)
+{
+    const double r = 6371.0;
+    const double p1 = qDegreesToRadians(lat1);
+    const double p2 = qDegreesToRadians(lat2);
+    const double dphi = qDegreesToRadians(lat2 - lat1);
+    const double dl = qDegreesToRadians(lng2 - lng1);
+    const double a = qSin(dphi / 2) * qSin(dphi / 2)
+        + qCos(p1) * qCos(p2) * qSin(dl / 2) * qSin(dl / 2);
+    return r * 2 * qAtan2(qSqrt(a), qSqrt(1 - a));
+}
+
 namespace {
 
 /** 高德网页导航：from/to 为 经度,纬度,名称。坐标系用 WGS-84，与网络定位一致。 */
@@ -234,8 +247,7 @@ UserWindow::UserWindow(QWidget *parent) : QMainWindow(parent)
 
     connect(&controller_, &UserController::connected, this, [this] {
         loginPage_->setStatus(u8("已连接运营平台"));
-        statusBar()->showMessage(u8("已连接  ") + loginPage_->serverHost() + ":"
-                                 + QString::number(loginPage_->serverPort()));
+        statusBar()->showMessage(u8("已连接服务器"));
     });
     connect(&controller_, &UserController::failed, this, [this](const QString &m) {
         loginPage_->setStatus(m);
@@ -246,8 +258,21 @@ UserWindow::UserWindow(QWidget *parent) : QMainWindow(parent)
         uiWarn(this, u8("无法开始充电"), u8("您有未完成的充电订单，请先结算"));
         showCharge(order);
     });
-    statusBar()->hide();
-    reconnect();
+
+    // 状态栏显示连接状态
+    statusBar()->showMessage(u8("正在连接服务器..."));
+
+    // 自动连接（使用固定地址）
+    QSettings settings(QStringLiteral("ChargeHub"), QStringLiteral("UserClient"));
+    QString server = settings.value(QStringLiteral("server"), QStringLiteral("127.0.0.1:8888")).toString();
+    QString host = server.section(':', 0, -2);
+    quint16 port = server.section(':', -1).toUShort();
+    if (port == 0) port = 8888;
+
+    // 延迟一点自动连接，让界面先显示
+    QTimer::singleShot(500, this, [this, host, port]() {
+        controller_.connectTo(host, port);
+    });
 }
 
 /** 清空动态卡片列表，避免刷新时叠一层。 */
@@ -813,10 +838,12 @@ QWidget *UserWindow::buildMe()
 /** 按登录页地址重新拨号。 */
 void UserWindow::reconnect()
 {
-    const QString host = loginPage_->serverHost();
-    const quint16 port = loginPage_->serverPort();
+    // 使用固定地址
+    QString host = QStringLiteral("127.0.0.1");
+    quint16 port = 8888;
+
     QSettings ini(QStringLiteral("ChargeHub"), QStringLiteral("UserClient"));
-    ini.setValue("server", loginPage_->serverAddress());
+    ini.setValue("server", QStringLiteral("127.0.0.1:8888"));
     loginPage_->setStatus(u8("正在连接 ") + host + ":" + QString::number(port) + u8(" …"));
     controller_.connectTo(host, port);
 }
@@ -832,6 +859,14 @@ void UserWindow::queryStations()
 {
     if (!controller_.isAuthenticated())
         return;
+
+    // 如果还没有位置信息且未尝试过IP定位，尝试IP定位
+    if (!useGps_ && !hasLocationFromIP_ &&
+        locLat_ == 39.9644 && locLng_ == 116.3473) {
+        fetchLocationByIP();
+        return;
+    }
+
     QJsonObject data = coord();
     const double radii[] = {3, 5, 10, 20};
     data["radiusKm"] = radii[qBound(0, radius_ ? radius_->currentIndex() : 3, 3)];
@@ -857,6 +892,7 @@ void UserWindow::applyUser(const QJsonObject &u)
         addrEdit_->setText(u.value("address").toString());
     refreshMe();
 }
+
 /** 登录成功切到主壳，先问位置授权再找桩。 */
 void UserWindow::showShell()
 {
@@ -952,6 +988,63 @@ void UserWindow::tryWindowsLocate()
     proc->start(exe, {QStringLiteral("-NoProfile"), QStringLiteral("-STA"),
                       QStringLiteral("-NonInteractive"), QStringLiteral("-Command"),
                       windowsLocateScript()});
+}
+
+/** 通过IP获取用户位置 */
+void UserWindow::fetchLocationByIP()
+{
+    if (!mapNetwork_) {
+        mapNetwork_ = new QNetworkAccessManager(this);
+    }
+
+    hasLocationFromIP_ = true;
+    if (locMatch_) {
+        locMatch_->setText(u8("正在通过IP获取位置…"));
+    }
+
+    QUrl url("http://ip-api.com/json/?fields=status,lat,lon,city,regionName&lang=zh-CN");
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::UserAgentHeader, "ChargeHub/1.0");
+
+    auto *reply = mapNetwork_->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        if (reply->error() == QNetworkReply::NoError) {
+            QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+            QJsonObject obj = doc.object();
+            if (obj.value("status").toString() == "success") {
+                double lat = obj.value("lat").toDouble();
+                double lng = obj.value("lon").toDouble();
+                QString city = obj.value("city").toString();
+                QString region = obj.value("regionName").toString();
+
+                if (lat != 0.0 || lng != 0.0) {
+                    locLat_ = lat;
+                    locLng_ = lng;
+                    useGps_ = true;
+                    gpsPlace_ = region.isEmpty() ? city : (city.isEmpty() ? region : region + " " + city);
+
+                    if (locMatch_) {
+                        locMatch_->setText(u8("已通过IP定位：") + gpsPlace_);
+                    }
+                    // 自动查找附近电站
+                    queryStations();
+                } else {
+                    if (locMatch_) {
+                        locMatch_->setText(u8("IP定位失败，请填写住址查找"));
+                    }
+                }
+            } else {
+                if (locMatch_) {
+                    locMatch_->setText(u8("IP定位服务不可用，请填写住址查找"));
+                }
+            }
+        } else {
+            if (locMatch_) {
+                locMatch_->setText(u8("IP定位请求失败，请填写住址查找"));
+            }
+        }
+        reply->deleteLater();
+    });
 }
 
 bool UserWindow::pickMyLocation()
@@ -1261,76 +1354,41 @@ void UserWindow::renderStations(const QJsonObject &data)
 
     clearBox(stationBox_);
 
-    const auto nearby = data.value("nearbyPiles").toArray();
-    if (!nearby.isEmpty()) {
-        auto *h = new QLabel(useGps_ ? u8("距您最近的充电桩") : u8("最近充电桩"));
-        h->setObjectName("h2");
-        stationBox_->addWidget(h);
-        auto *hint = new QLabel(useGps_
-                                    ? u8("已按您的定位计算直线距离，由近到远")
-                                    : u8("按您填写的所在地自动匹配，距离由近到远"));
-        hint->setObjectName("muted");
-        stationBox_->addWidget(hint);
-        for (const auto &v : nearby) {
-            const auto p = v.toObject();
-            auto *c = card();
-            auto *cl = new QVBoxLayout(c);
-            cl->setContentsMargins(14, 12, 14, 12);
-            cl->setSpacing(6);
-            auto *row = new QHBoxLayout;
-            const QString code = p.value("code").toString().isEmpty()
-                                     ? p.value("pileNo").toString()
-                                     : p.value("code").toString();
-            const QString stName = p.value("stationName").toString().isEmpty()
-                                       ? p.value("station").toString()
-                                       : p.value("stationName").toString();
-            auto *name = new QLabel(code + "  " + stName);
-            name->setObjectName("cardTitle");
-            QString st = p.value("status").toString();
-            if (st == u8("闲置"))
-                st = u8("空闲");
-            else if (st == u8("在用"))
-                st = u8("占用");
-            auto *pill = new QLabel(st);
-            pill->setObjectName(st == u8("空闲") ? "pillOk" : (st == u8("故障") ? "pillOff" : "pillBusy"));
-            row->addWidget(name, 1);
-            row->addWidget(pill, 0, Qt::AlignRight);
-            cl->addLayout(row);
-            const QString ptype = p.value("pileType").toString().isEmpty()
-                                      ? p.value("type").toString()
-                                      : p.value("pileType").toString();
-            auto *meta = new QLabel(QString::fromUtf8("%1  ·  %2  ·  %3 km  ·  ¥%4/度")
-                                        .arg(p.value("stationAddress").toString())
-                                        .arg(ptype)
-                                        .arg(p.value("distanceKm").toDouble(), 0, 'f', 1)
-                                        .arg(p.value("pricePerKwh").toDouble(), 0, 'f', 2));
-            meta->setObjectName("muted");
-            meta->setWordWrap(true);
-            cl->addWidget(meta);
-            auto *go = new QPushButton(u8("去该站选桩"));
-            const int sid = p.value("stationId").toInt();
-            connect(go, &QPushButton::clicked, this, [this, sid] {
-                controller_.request("QUERY_PILES", QJsonObject{{"stationId", sid}});
-            });
-            cl->addWidget(go);
-            stationBox_->addWidget(c);
-        }
+    // 获取电站数组并按距离排序
+    QJsonArray stations = data.value("stations").toArray();
+    QVector<QJsonObject> stationList;
+    for (const auto &v : stations) {
+        stationList.append(v.toObject());
     }
 
+    // 如果已定位，按距离排序
+    if (useGps_ || (locLat_ != 39.9644 || locLng_ != 116.3473)) {
+        std::sort(stationList.begin(), stationList.end(),
+            [this](const QJsonObject &a, const QJsonObject &b) {
+                double distA = haversine(locLat_, locLng_,
+                                         a.value("lat").toDouble(),
+                                         a.value("lng").toDouble());
+                double distB = haversine(locLat_, locLng_,
+                                         b.value("lat").toDouble(),
+                                         b.value("lng").toDouble());
+                return distA < distB;
+            });
+    }
+
+    // 渲染排序后的电站列表
     auto *sh = new QLabel(u8("附近充电站"));
     sh->setObjectName("h2");
     stationBox_->addWidget(sh);
 
-    const auto arr = data.value("stations").toArray();
-    if (arr.isEmpty()) {
+    if (stationList.isEmpty()) {
         auto *lab = new QLabel(u8("附近暂无充电站，请换一个更具体的地址试试"));
         lab->setObjectName("muted");
         stationBox_->addWidget(lab);
         stationBox_->addStretch();
         return;
     }
-    for (const auto &v : arr) {
-        const auto s = v.toObject();
+
+    for (const auto &s : stationList) {
         auto *c = card();
         auto *cl = new QVBoxLayout(c);
         cl->setContentsMargins(16, 14, 16, 14);
@@ -1946,7 +2004,6 @@ void UserWindow::onResp(QJsonObject obj)
                u8("流水号 %1\n金额 ¥%2")
                    .arg(data.value("tradeNo").toString())
                    .arg(data.value("amount").toDouble(), 0, 'f', 2));
-        // applyUser() calls refreshMe(), which requests LIST_RECHARGE once when logged in.
         applyUser(controller_.user());
     } else if (type == "UPDATE_PROFILE") {
         applyUser(controller_.user());
@@ -1954,4 +2011,16 @@ void UserWindow::onResp(QJsonObject obj)
     } else if (type == "LIST_RECHARGE") {
         renderRecharge(data.value("records").toArray());
     }
+}
+
+double UserWindow::haversine(double lat1, double lng1, double lat2, double lng2)
+{
+    const double r = 6371.0;
+    const double p1 = qDegreesToRadians(lat1);
+    const double p2 = qDegreesToRadians(lat2);
+    const double dphi = qDegreesToRadians(lat2 - lat1);
+    const double dl = qDegreesToRadians(lng2 - lng1);
+    const double a = qSin(dphi / 2) * qSin(dphi / 2)
+        + qCos(p1) * qCos(p2) * qSin(dl / 2) * qSin(dl / 2);
+    return r * 2 * qAtan2(qSqrt(a), qSqrt(1 - a));
 }
