@@ -8,6 +8,7 @@
 #include "dispatch.h"
 
 #include "database.h"
+#include "services/chargeservice.h"
 #include "services/sessionservice.h"
 #include "transport/requestdispatcher.h"
 
@@ -190,6 +191,7 @@ ServiceResult legacyResult(QJsonObject body, const QString &message = QStringLit
 Dispatch::Dispatch(Database *db)
     : db_(db),
       sessions_(std::make_unique<SessionService>(db)),
+      charges_(std::make_unique<ChargeService>(db, sessions_.get())),
       requestDispatcher_(std::make_unique<RequestDispatcher>(sessions_.get()))
 {
     registerRoutes();
@@ -227,21 +229,21 @@ void Dispatch::registerRoutes()
         return legacyResult(queryPiles(u, d), QStringLiteral("ok"), 404);
     });
     add("START_CHARGE", true, [this](const QVariantMap &u, const QJsonObject &d) {
-        return legacyResult(startCharge(u, d), QString::fromUtf8("充电已开始"));
+        return legacyResult(charges_->start(u, d), QString::fromUtf8("充电已开始"));
     });
     add("CHARGE_STATUS", false, [this](const QVariantMap &u, const QJsonObject &) {
-        const QJsonObject body = chargeStatus(u);
+        const QJsonObject body = charges_->status(u);
         return SR::ok(body, body.value("order").isNull() ? QString::fromUtf8("无进行中订单")
                                                           : QStringLiteral("ok"));
     });
     add("STOP_CHARGE", true, [this](const QVariantMap &u, const QJsonObject &) {
-        return legacyResult(stopCharge(u), QString::fromUtf8("请结算订单"));
+        return legacyResult(charges_->stop(u), QString::fromUtf8("请结算订单"));
     });
     add("SETTLE_ORDER", true, [this](const QVariantMap &u, const QJsonObject &) {
-        return legacyResult(settle(u), QString::fromUtf8("结算成功"));
+        return legacyResult(charges_->settle(u), QString::fromUtf8("结算成功"));
     });
     add("LIST_ORDERS", false, [this](const QVariantMap &u, const QJsonObject &) {
-        return SR::ok(listOrders(u));
+        return SR::ok(charges_->listOrders(u));
     });
     add("LIST_RECHARGE", false, [this](const QVariantMap &u, const QJsonObject &) {
         return SR::ok(listRecharge(u));
@@ -476,7 +478,7 @@ QJsonObject Dispatch::queryStations(const QVariantMap &user, const QJsonObject &
 QJsonObject Dispatch::closeAccount(const QVariantMap &user)
 {
     const int uid = user.value("id").toInt();
-    auto open = openOrder(uid);
+    auto open = charges_->openOrder(uid);
     if (!open.isEmpty())
         return QJsonObject{{"errorCode", 409},
                            {"error", QString::fromUtf8("请先结束充电并完成结算，再注销账号")}};
@@ -564,225 +566,6 @@ QJsonObject Dispatch::queryPiles(const QVariantMap &user, const QJsonObject &dat
         {"piles", pilesOut},
         {"reviews", reviews},
     };
-}
-
-/** 该用户充电中或待结算的那一单；没有则空。 */
-QVariantMap Dispatch::openOrder(int userId) const
-{
-    return db_->one(
-        "SELECT * FROM charge_order WHERE user_id=? AND status IN ('充电中','待结算') ORDER BY id DESC LIMIT 1",
-        {userId});
-}
-
-/** 按小时切段：电量=功率×时长，费用用分累计后再换成元。 */
-QJsonObject Dispatch::calcLive(const QVariantMap &order, const QVariantMap &pile, const QVariantMap &station) const
-{
-    const QDateTime start = QDateTime::fromString(order.value("start_time").toString(), "yyyy-MM-dd HH:mm:ss");
-    QDateTime end = QDateTime::currentDateTime();
-    if (order.value("status").toString() != QString::fromUtf8("充电中") && !order.value("end_time").toString().isEmpty())
-        end = QDateTime::fromString(order.value("end_time").toString(), "yyyy-MM-dd HH:mm:ss");
-    const int seconds = qMax(0, start.isValid() && end.isValid() ? int(start.secsTo(end)) : 0);
-    const double power = pile.value("power_kw").toDouble();
-    const double fallback = station.value("price_per_kwh").toDouble();
-    const auto rules = db_->query(
-        "SELECT start_hour, end_hour, price_per_kwh, label FROM tariff_rule WHERE station_id=? ORDER BY start_hour",
-        {station.value("id")});
-    auto priceAt = [&](int hour) {
-        hour = qBound(0, hour, 23);
-        for (const auto &r : rules) {
-            if (hour >= r.value("start_hour").toInt() && hour < r.value("end_hour").toInt())
-                return r.value("price_per_kwh").toDouble();
-        }
-        return fallback;
-    };
-    auto labelAt = [&](int hour) {
-        hour = qBound(0, hour, 23);
-        for (const auto &r : rules) {
-            if (hour >= r.value("start_hour").toInt() && hour < r.value("end_hour").toInt())
-                return r.value("label").toString();
-        }
-        return QString();
-    };
-    double energy = 0;
-    qint64 fen = 0;
-    if (start.isValid() && end.isValid() && end > start) {
-        QDateTime cursor = start;
-        while (cursor < end) {
-            QDateTime hourEnd(cursor.date(), QTime(cursor.time().hour(), 0, 0));
-            hourEnd = hourEnd.addSecs(3600);
-            if (hourEnd > end)
-                hourEnd = end;
-            const int secs = qMax(0, int(cursor.secsTo(hourEnd)));
-            const double e = power * (secs / 3600.0);
-            energy += e;
-            fen += fenOf(e * priceAt(cursor.time().hour()));
-            cursor = hourEnd;
-        }
-    }
-    energy = qRound(energy * 1000) / 1000.0;
-    const double amount = moneyFen(fen);
-    const int nowH = QDateTime::currentDateTime().time().hour();
-    const double current = priceAt(nowH);
-    const double shown = energy > 1e-9 ? money(amount / energy) : current;
-    return QJsonObject{
-        {"seconds", seconds},
-        {"energyKwh", energy},
-        {"amount", amount},
-        {"powerKw", power},
-        {"pricePerKwh", shown},
-        {"currentPrice", current},
-        {"tariffLabel", labelAt(nowH)},
-    };
-}
-
-/** 旧订单字段原样保留，再并上 calcLive 的电量、金额、分时标签。 */
-QJsonObject Dispatch::publicOrder(const QVariantMap &o, const QVariantMap &p, const QVariantMap &s, const QJsonObject &live) const
-{
-    QJsonObject r{
-        {"id", o.value("id").toInt()},
-        {"orderNo", o.value("order_no").toString()},
-        {"status", o.value("status").toString()},
-        {"startTime", o.value("start_time").toString()},
-        {"endTime", o.value("end_time").toString()},
-        {"pileNo", p.value("pile_no").toString()},
-        {"stationName", s.value("name").toString()},
-        {"type", p.value("type").toString()},
-    };
-    for (auto it = live.begin(); it != live.end(); ++it)
-        r.insert(it.key(), it.value());
-    return r;
-}
-
-/** 一用户一笔未完成订单、一桩同时只能充一单；成功后桩改「在用」。 */
-QJsonObject Dispatch::startCharge(const QVariantMap &user, const QJsonObject &data)
-{
-    expireReservations();
-    if (!openOrder(user.value("id").toInt()).isEmpty())
-        return QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("您有未完成的充电订单，请先结算")}};
-    if (user.value("balance").toDouble() <= 0)
-        return QJsonObject{{"errorCode", 402}, {"error", QString::fromUtf8("余额不足，请先充值")}};
-    const int pileId = data.value("pileId").toInt();
-    auto pile = db_->one("SELECT * FROM pile WHERE id=?", {pileId});
-    if (pile.isEmpty())
-        return QJsonObject{{"errorCode", 404}, {"error", QString::fromUtf8("电桩不存在")}};
-    const QString st = pile.value("status").toString();
-    if (st == QString::fromUtf8("故障"))
-        return QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("电桩故障，请选择其他电桩")}};
-    if (st == QString::fromUtf8("在用"))
-        return QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("电桩正在使用中")}};
-    auto res = activeReserve(pileId);
-    if (!res.isEmpty() && res.value("user_id").toInt() != user.value("id").toInt())
-        return QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("该桩已被他人预约")}};
-    auto station = db_->one("SELECT * FROM station WHERE id=?", {pile.value("station_id")});
-    const QString t = nowStr();
-    const QString no = "CH" + QDateTime::currentDateTime().toString("yyyyMMddHHmmss") + QString::number(user.value("id").toInt());
-    int oid = 0;
-    if (!db_->transaction([&] {
-            if (!openOrder(user.value("id").toInt()).isEmpty())
-                return false;
-            auto livePile = db_->one("SELECT * FROM pile WHERE id=?", {pileId});
-            if (livePile.isEmpty() || livePile.value("status").toString() != QString::fromUtf8("闲置"))
-                return false;
-            oid = db_->execute(
-                "INSERT INTO charge_order(order_no,user_id,pile_id,status,start_time,energy_kwh,amount,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?)",
-                {no, user.value("id"), pileId, QString::fromUtf8("充电中"), t, 0, 0, t});
-            if (oid <= 0)
-                return false;
-            if (db_->execute("UPDATE pile SET status=?, last_seen_at=? WHERE id=?",
-                             {QString::fromUtf8("在用"), t, pileId})
-                < 0)
-                return false;
-            if (!res.isEmpty()
-                && db_->execute("UPDATE reservation SET status=? WHERE id=?",
-                                {QString::fromUtf8("已履约"), res.value("id")})
-                    < 0)
-                return false;
-            return true;
-        })) {
-        return QJsonObject{{"errorCode", 409},
-                           {"error", QString::fromUtf8("开充未成功，请确认没有未完成订单且电桩空闲")}};
-    }
-    auto order = db_->one("SELECT * FROM charge_order WHERE id=?", {oid});
-    pile = db_->one("SELECT * FROM pile WHERE id=?", {pileId});
-    return QJsonObject{{"order", publicOrder(order, pile, station, calcLive(order, pile, station))}};
-}
-
-/** 未完成单 + calcLive；无单则 order 为 null。 */
-QJsonObject Dispatch::chargeStatus(const QVariantMap &user) const
-{
-    auto order = openOrder(user.value("id").toInt());
-    if (order.isEmpty())
-        return QJsonObject{{"order", QJsonValue::Null}};
-    auto pile = db_->one("SELECT * FROM pile WHERE id=?", {order.value("pile_id")});
-    auto station = db_->one("SELECT * FROM station WHERE id=?", {pile.value("station_id")});
-    return QJsonObject{{"order", publicOrder(order, pile, station, calcLive(order, pile, station))}};
-}
-
-/** 充电中 → 待结算，写下电量费用，桩改闲置。 */
-/** 充电中→待结算，calcLive 落库，桩回闲置。 */
-QJsonObject Dispatch::stopCharge(const QVariantMap &user)
-{
-    auto order = db_->one(
-        "SELECT * FROM charge_order WHERE user_id=? AND status='充电中' ORDER BY id DESC LIMIT 1",
-        {user.value("id")});
-    if (order.isEmpty())
-        return QJsonObject{{"errorCode", 404}, {"error", QString::fromUtf8("没有正在进行的充电")}};
-    auto pile = db_->one("SELECT * FROM pile WHERE id=?", {order.value("pile_id")});
-    auto station = db_->one("SELECT * FROM station WHERE id=?", {pile.value("station_id")});
-    auto live = calcLive(order, pile, station);
-    const int minutes = qMax(1, live.value("seconds").toInt() / 60);
-    const QString t = nowStr();
-    if (!db_->transaction([&] {
-            if (db_->execute("UPDATE charge_order SET status=?, end_time=?, energy_kwh=?, amount=? WHERE id=?",
-                             {QString::fromUtf8("待结算"), t, live.value("energyKwh").toDouble(),
-                              live.value("amount").toDouble(), order.value("id")})
-                < 0)
-                return false;
-            return db_->execute(
-                       "UPDATE pile SET status=?, total_charge_count=total_charge_count+1, "
-                       "total_charge_minutes=total_charge_minutes+?, last_seen_at=? WHERE id=?",
-                       {QString::fromUtf8("闲置"), minutes, t, pile.value("id")})
-                >= 0;
-        })) {
-        return QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("结束充电未写入，请重试")}};
-    }
-    order = db_->one("SELECT * FROM charge_order WHERE id=?", {order.value("id")});
-    pile = db_->one("SELECT * FROM pile WHERE id=?", {pile.value("id")});
-    return QJsonObject{{"order", publicOrder(order, pile, station, calcLive(order, pile, station))}};
-}
-
-/** 待结算订单扣余额（按分），桩改闲置。 */
-/** 待结算按分扣余额，订单改为已完成。 */
-QJsonObject Dispatch::settle(const QVariantMap &userIn)
-{
-    auto order = db_->one(
-        "SELECT * FROM charge_order WHERE user_id=? AND status='待结算' ORDER BY id DESC LIMIT 1",
-        {userIn.value("id")});
-    if (order.isEmpty())
-        return QJsonObject{{"errorCode", 404}, {"error", QString::fromUtf8("没有待结算订单")}};
-    auto user = db_->one("SELECT * FROM user WHERE id=?", {userIn.value("id")});
-    if (fenOf(user.value("balance").toDouble()) < fenOf(order.value("amount").toDouble()))
-        return QJsonObject{{"errorCode", 402}, {"error", QString::fromUtf8("余额不足，请先充值后再结算")}};
-    if (!db_->transaction([&] {
-            auto fresh = db_->one("SELECT balance FROM user WHERE id=?", {user.value("id")});
-            if (fenOf(fresh.value("balance").toDouble()) < fenOf(order.value("amount").toDouble()))
-                return false;
-            const qint64 nb = fenOf(fresh.value("balance").toDouble()) - fenOf(order.value("amount").toDouble());
-            if (db_->execute("UPDATE user SET balance=? WHERE id=?", {moneyFen(nb), user.value("id")}) < 0)
-                return false;
-            return db_->execute("UPDATE charge_order SET status=? WHERE id=?",
-                                {QString::fromUtf8("已完成"), order.value("id")})
-                >= 0;
-        })) {
-        return QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("结算未写入，请重试")}};
-    }
-    user = db_->one("SELECT * FROM user WHERE id=?", {user.value("id")});
-    auto pile = db_->one("SELECT * FROM pile WHERE id=?", {order.value("pile_id")});
-    auto station = db_->one("SELECT * FROM station WHERE id=?", {pile.value("station_id")});
-    auto live = calcLive(order, pile, station);
-    return QJsonObject{{"order", publicOrder(order, pile, station, live)},
-                       {"user", sessions_->publicUser(user)}};
 }
 
 /** 只查 admin 表，SHA256 比对；失败文案统一「账号或密码错误」。 */
@@ -920,9 +703,9 @@ void Dispatch::freezeUser(int userId, bool freeze)
     if (u.isEmpty() || u.value("status").toString() == QString::fromUtf8("注销"))
         return;
     if (freeze) {
-        auto order = openOrder(userId);
+        auto order = charges_->openOrder(userId);
         if (!order.isEmpty() && order.value("status").toString() == QString::fromUtf8("充电中"))
-            stopCharge(u);
+            charges_->stop(u);
         db_->execute("UPDATE user SET status=?, close_reason=?, closed_at=? WHERE id=?",
                      {QString::fromUtf8("冻结"), QString::fromUtf8("管理员冻结"), nowStr(), userId});
         sessions_->dropUser(userId);
@@ -1018,10 +801,7 @@ QString Dispatch::adoptDispatchPlan(int planId)
 /** 推送用：等价于该用户的 chargeStatus。 */
 QJsonObject Dispatch::chargePushFor(int userId) const
 {
-    auto user = db_->one("SELECT * FROM user WHERE id=?", {userId});
-    if (user.isEmpty())
-        return {};
-    return chargeStatus(user);
+    return charges_->pushFor(userId);
 }
 
 /** 闲置桩标故障；充电中须先强制结束。 */
@@ -1068,40 +848,13 @@ QString Dispatch::updateStation(int stationId, const QVariantMap &data)
 /** 运营指定订单走 stopCharge，并写审计。 */
 QString Dispatch::forceStopOrder(int orderId)
 {
-    auto order = db_->one("SELECT * FROM charge_order WHERE id=?", {orderId});
-    if (order.isEmpty())
-        return QString::fromUtf8("订单不存在");
-    if (order.value("status").toString() != QString::fromUtf8("充电中"))
-        return QString::fromUtf8("只有充电中的订单可以强制结束");
-    auto user = db_->one("SELECT * FROM user WHERE id=?", {order.value("user_id")});
-    const auto r = stopCharge(user);
-    if (r.contains("error"))
-        return r.value("error").toString();
-    db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
-                 {"admin", QString::fromUtf8("强制结束充电"), order.value("order_no"),
-                  QString::fromUtf8("待结算"), nowStr()});
-    return QString::fromUtf8("已强制结束，订单进入待结算");
+    return charges_->forceStop(orderId);
 }
 
 /** 充电中则先强制停，再 settle 扣款，写审计。 */
 QString Dispatch::forceSettleOrder(int orderId)
 {
-    auto order = db_->one("SELECT * FROM charge_order WHERE id=?", {orderId});
-    if (order.isEmpty())
-        return QString::fromUtf8("订单不存在");
-    auto user = db_->one("SELECT * FROM user WHERE id=?", {order.value("user_id")});
-    if (order.value("status").toString() == QString::fromUtf8("充电中")) {
-        const QString stopMsg = forceStopOrder(orderId);
-        if (!stopMsg.contains(QString::fromUtf8("待结算")))
-            return stopMsg;
-    }
-    const auto r = settle(user);
-    if (r.contains("error"))
-        return r.value("error").toString();
-    db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
-                 {"admin", QString::fromUtf8("代结算"), order.value("order_no"), QString::fromUtf8("已完成"),
-                  nowStr()});
-    return QString::fromUtf8("已代结算并扣款");
+    return charges_->forceSettle(orderId);
 }
 
 /** 最近若干条 audit_log，最多 200。 */
@@ -1113,19 +866,7 @@ QVector<QVariantMap> Dispatch::listAudit(int limit) const
 /** 断线超时：对该用户充电中订单走 stopCharge，审计写「断线释放」。 */
 void Dispatch::releaseStaleSession(int userId)
 {
-    auto user = db_->one("SELECT * FROM user WHERE id=?", {userId});
-    if (user.isEmpty())
-        return;
-    auto order = db_->one(
-        "SELECT * FROM charge_order WHERE user_id=? AND status='充电中' ORDER BY id DESC LIMIT 1", {userId});
-    if (order.isEmpty())
-        return;
-    const auto r = stopCharge(user);
-    if (!r.contains("error")) {
-        db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
-                     {"system", QString::fromUtf8("断线释放"), order.value("order_no"),
-                      QString::fromUtf8("待结算"), nowStr()});
-    }
+    charges_->releaseStaleSession(userId);
 }
 
 /** 过期仍「有效」的预约改为已取消并标 no_show。 */
@@ -1148,34 +889,6 @@ bool Dispatch::pileIsIdle(const QVariantMap &pile) const
     if (pile.value("status").toString() != QString::fromUtf8("闲置"))
         return false;
     return activeReserve(pile.value("id").toInt()).isEmpty();
-}
-
-/** 当前用户全部订单，带 publicOrder 字段。 */
-QJsonObject Dispatch::listOrders(const QVariantMap &user)
-{
-    const auto rows = db_->query(
-        "SELECT o.*, p.pile_no, p.type, p.power_kw, s.name, s.price_per_kwh "
-        "FROM charge_order o JOIN pile p ON p.id=o.pile_id JOIN station s ON s.id=p.station_id "
-        "WHERE o.user_id=? ORDER BY o.id DESC LIMIT 40",
-        {user.value("id")});
-    QJsonArray arr;
-    for (const auto &o : rows) {
-        QJsonObject live;
-        if (o.value("status").toString() == QString::fromUtf8("充电中")
-            || o.value("status").toString() == QString::fromUtf8("待结算")) {
-            live = calcLive(o, o, o);
-        } else {
-            live = QJsonObject{
-                {"seconds", 0},
-                {"energyKwh", o.value("energy_kwh").toDouble()},
-                {"amount", o.value("amount").toDouble()},
-                {"powerKw", o.value("power_kw").toDouble()},
-                {"pricePerKwh", o.value("price_per_kwh").toDouble()},
-            };
-        }
-        arr.append(publicOrder(o, o, o, live));
-    }
-    return QJsonObject{{"orders", arr}};
 }
 
 /** 当前用户充值流水。 */

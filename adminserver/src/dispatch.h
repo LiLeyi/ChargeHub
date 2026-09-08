@@ -23,6 +23,7 @@
 #include <QVector>
 
 class Database;
+class ChargeService;
 class RequestDispatcher;
 class SessionService;
 
@@ -182,6 +183,7 @@ public:
 private:
     Database *db_;
     std::unique_ptr<SessionService> sessions_;
+    std::unique_ptr<ChargeService> charges_;
     std::unique_ptr<RequestDispatcher> requestDispatcher_;
 
     /** 注册用户端协议路由，业务实现仍由各领域函数承接。 */
@@ -217,34 +219,6 @@ private:
      */
     QJsonObject queryPiles(const QVariantMap &user, const QJsonObject &data);
 
-    /**
-     * 开充。先拦：已有未完成单 / 余额≤0 / 桩故障或在用 / 被他人预约。
-     * 事务：插 charge_order(充电中)、pile→在用、本人预约→已履约。
-     * 被 handle(START_CHARGE) 调用。
-     */
-    QJsonObject startCharge(const QVariantMap &user, const QJsonObject &data);
-
-    /**
-     * 查该用户未完成订单并用 calcLive 算当前费用。
-     * 无单则 order=null。也被用户端开充前探测、PUSH 共用逻辑。
-     * 被 handle(CHARGE_STATUS) 调用。
-     */
-    QJsonObject chargeStatus(const QVariantMap &user) const;
-
-    /**
-     * 充电中→待结算：写下电量费用，桩回闲置。无充电中单则失败。
-     * 被 handle(STOP_CHARGE) 调用。
-     */
-    QJsonObject stopCharge(const QVariantMap &user);
-
-    /**
-     * 待结算扣余额（先分后元），订单→已完成。内部再读最新余额防脏读。
-     * 被 handle(SETTLE_ORDER) 调用。
-     */
-    QJsonObject settle(const QVariantMap &user);
-
-    /** 当前用户订单列表。被 handle(LIST_ORDERS) 调用。 */
-    QJsonObject listOrders(const QVariantMap &user);
     /** 当前用户充值流水。被 handle(LIST_RECHARGE) 调用。 */
     QJsonObject listRecharge(const QVariantMap &user);
     /** 当前用户预约列表（会先过期处理）。被 handle(LIST_RESERVATIONS) 调用。 */
@@ -274,21 +248,6 @@ private:
     QVariantMap activeReserve(int pileId) const;
     /** 桩状态为闲置，且当前没有任何有效预约。开充对「预约就是你」另判。 */
     bool pileIsIdle(const QVariantMap &pile) const;
-    /** 该用户「充电中或待结算」的那一单；没有则空。对应部分唯一索引。 */
-    QVariantMap openOrder(int userId) const;
-
-    /**
-     * 实时计费：按小时切段。电量=功率kW×时长h；费用按该小时单价累加（先分后元）。
-     * 有 tariff_rule 用谷/平/峰，否则用 station.price_per_kwh。
-     * 被 startCharge / stopCharge / settle / chargeStatus / chargePushFor 共用。
-     */
-    QJsonObject calcLive(const QVariantMap &order, const QVariantMap &pile, const QVariantMap &station) const;
-
-    /**
-     * 订单对外字段：旧客户端认识的 id/orderNo/status/电量/金额保持不变，
-     * 再并上 live（可含 currentPrice、tariffLabel）。
-     */
-    QJsonObject publicOrder(const QVariantMap &o, const QVariantMap &p, const QVariantMap &s, const QJsonObject &live) const;
 };
 
 #endif
