@@ -5,7 +5,7 @@
 | 窗口 | 是什么 | 谁开 |
 |------|--------|------|
 | **管理端** | 服务器 + 运营后台（写数据库、听 8888 端口） | 全组联调时 **只允许一台电脑开** |
-| **用户端** | 像手机的充电 App | 每个人的虚拟机都可以开，可以同时开很多个 |
+| **用户端** | 手机竖屏充电 App（底栏找桩 / 预约 / 充电 / 订单 / 我的） | 每个人的虚拟机都可以开，可以同时开很多个 |
 | **运营大屏** | 浏览器里的图表 | 任何人用浏览器打开即可（只看、不改数据） |
 
 只在 **Ubuntu 22.04 桌面** 里运行。不要在 Windows 里双击这些程序。
@@ -97,7 +97,7 @@ bash scripts/rebuild.sh
 | `ChargeHub/scripts/打开运营后台.bat` | 管理端 | `admin` / `123456` |
 | `ChargeHub/scripts/打开用户端.bat` | 用户端 | `13800138000` / `123456`，服务器 `127.0.0.1:8888` |
 
-用户端先点「连接」，连上后再点「登录」。  
+用户端先点「连接」，连上后再点「登录」。窗口是手机竖屏，底栏切换找桩 / 预约 / 充电 / 订单 / 我的。  
 大屏：管理端里 **运营决策大屏** → **打开 Web 大屏**。
 
 ### 2.2 建议自测顺序（约 10 分钟）
@@ -107,9 +107,9 @@ bash scripts/rebuild.sh
 1. **登录**  
    用户端能进首页；管理端「用户管理」里能看到 `13800138000`。
 2. **找桩**  
-   首页填一个地点（可试「北京理工大学」或旁边快捷标签），点查找。应出现电站和附近桩。
+   登录后会弹出位置授权。同意后优先用 Windows 定位（Wi-Fi/系统定位）。不准时会弹出地图，点一下您所在的位置；也可随时点「地图选点」或填精确住址。点电站「位置 / 导航」会从该点导航到充电站。
 3. **预约 / 充电**  
-   选一根闲置桩：预约或直接开始充电。用户端充电页应有度数、金额在变。
+   选一根闲置桩：预约或直接开始充电。用户端充电页应有度数、金额在变；总价含固定 1 元起步价。
 4. **停止并结算**  
    结束充电 → 待结算 → 结算。余额应减少；管理端「订单跟踪」应出现这条订单。
 5. **充值**  
@@ -360,7 +360,9 @@ cd ~/ChargeHub-Linux/user && ./run.sh
 | `userclient/src/client.*` | TCP 客户端 | `connectTo(ip,8888)` `request(type,data,token)` | 只加请求，禁止 `QSqlDatabase` |
 | `userclient/src/userwindow.*` | 用户界面 | 按钮 → `Client::request` | 界面与交互 |
 | `adminserver/src/tcpserver.*` | 听 8888、多用户连接；断线 60s 释放桩 | 内部调用 `Dispatch::handle` / `releaseStaleSession` | 会话与超时 |
-| `adminserver/src/dispatch.*` | **全部业务规则** | `handle`（用户端）；`adminLogin` / `freezeUser` / `markPileFault` / `forceStopOrder` 等（GUI） | 加功能优先改这里 |
+| `adminserver/src/dispatch.*` | 装配与兼容门面 | `handle`（用户端）；`adminLogin` / `freezeUser` 等（GUI） | 对外签名不要改 |
+| `adminserver/src/services/` | 会话 / 充电 / 预约 / 电站 / 用户 / 评价 / 运营 / 分析 | 各领域函数；找桩 GPS 在 `StationService` | 加业务优先改对应服务 |
+| `adminserver/src/transport/` | 路由、鉴权、幂等 | `RequestDispatcher` | 新 type 在 `registerRoutes` 注册 |
 | `adminserver/src/database.*` | SQLite 唯一写入口 | `query` / `one` / `execute` / `transaction` | 改表要同步 `schema.sql` |
 | `adminserver/src/mainwindow.*` | 运营界面 | 直接调 Dispatch，不走 Socket | 后台页面 |
 | `adminserver/src/chartwidget.*` | 自绘图表 | `setPoints` / `setBars` / `setSlices` | 仅显示 |
@@ -372,7 +374,7 @@ cd ~/ChargeHub-Linux/user && ./run.sh
 用户端报文的 type、字段、错误码见 **`protocol/messages.md`**。新增接口的步骤：
 
 1. 在 `messages.md` 加一行 type
-2. 在 `Dispatch::handle` 分支里实现并写库
+2. 在对应 `services/` 里实现，并在 `Dispatch::registerRoutes` 注册
 3. 在 `UserWindow` 里 `request(...)` 并处理 `responded`
 
 管理端 GUI 新增按钮：只调 `Dispatch` 的 C++ 方法，不要再发明一套 Socket。

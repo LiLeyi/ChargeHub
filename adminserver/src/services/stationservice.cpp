@@ -2,6 +2,7 @@
 
 #include "database.h"
 #include "reservationservice.h"
+#include "tencentapi.h"
 
 #include <algorithm>
 #include <QHash>
@@ -71,8 +72,12 @@ static GeoHit resolveAddress(const QString &raw, const QVector<QVariantMap> &sta
     };
     for (const auto &lm : lms)
         consider(QString::fromUtf8(lm.k), QString::fromUtf8(lm.n), lm.lat, lm.lng);
-    if (!best.matched)
+    if (!best.matched && !t.isEmpty()) {
+        const TencentApi::Geo geo = TencentApi::geocode(t);
+        if (geo.ok)
+            return {geo.name.isEmpty() ? t : geo.name, geo.lat, geo.lng, true};
         best.name = QString::fromUtf8("未精确匹配，已按海淀中关村一带检索");
+    }
     return best;
 }
 
@@ -96,7 +101,18 @@ QJsonObject StationService::queryStations(const QVariantMap &user, const QJsonOb
     if (address.isEmpty())
         address = user.value("address").toString().trimmed();
     GeoHit hit;
-    if (!address.isEmpty()) {
+    const bool useGps = data.value("useGps").toBool()
+                        && data.contains("lat") && data.contains("lng");
+    if (useGps) {
+        hit.lat = data.value("lat").toDouble();
+        hit.lng = data.value("lng").toDouble();
+        hit.name = data.value("placeName").toString();
+        if (hit.name.isEmpty())
+            hit.name = QString::fromUtf8("GPS 定位");
+        hit.matched = true;
+        db_->execute("UPDATE user SET loc_lat=?, loc_lng=? WHERE id=?",
+                     {hit.lat, hit.lng, user.value("id")});
+    } else if (!address.isEmpty()) {
         hit = resolveAddress(address, stations);
     } else if (user.contains("loc_lat")) {
         hit.lat = user.value("loc_lat").toDouble();
@@ -111,7 +127,7 @@ QJsonObject StationService::queryStations(const QVariantMap &user, const QJsonOb
     } else {
         hit = resolveAddress(QString(), stations);
     }
-    if (!address.isEmpty()) {
+    if (!useGps && !address.isEmpty()) {
         db_->execute("UPDATE user SET address=?, loc_lat=?, loc_lng=? WHERE id=?",
                      {address, hit.lat, hit.lng, user.value("id")});
     }

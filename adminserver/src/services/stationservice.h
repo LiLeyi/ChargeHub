@@ -9,7 +9,7 @@
 class Database;
 class ReservationService;
 
-/** 用户侧电站检索、距离排序和电桩详情查询。 */
+/** 用户侧电站检索、距离排序和电桩详情查询。可选 useGps+lat+lng+placeName。 */
 class StationService {
 public:
     StationService(Database *db, ReservationService *reservations);

@@ -15,7 +15,8 @@ SOURCES += \
     src/pages/orderspage.cpp \
     src/pages/reservationspage.cpp \
     src/userwindow.cpp \
-    ../common/protocol.cpp
+    ../common/protocol.cpp \
+    ../common/tencentapi.cpp
 
 HEADERS += \
     src/client.h \
@@ -27,7 +28,8 @@ HEADERS += \
     src/userwindow.h \
     ../common/protocol.h \
     ../common/appstyle.h \
-    ../common/uidialog.h
+    ../common/uidialog.h \
+    ../common/tencentapi.h
 
 unix {
     QMAKE_CXXFLAGS += -finput-charset=UTF-8

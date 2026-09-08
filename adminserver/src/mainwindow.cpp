@@ -651,8 +651,9 @@ void MainWindow::refresh()
     if (!rep.isEmpty()) {
         mlMae_->setText(u8("MAE\n") + QString::number(rep.value("mae").toDouble(), 'f', 3));
         mlRmse_->setText(u8("RMSE\n") + QString::number(rep.value("rmse").toDouble(), 'f', 3));
-        mlWeather_->setText(u8("天气 / 模型\n") + rep.value("weather").toString() + "  " + rep.value("model_version").toString());
-        mlHint_->setText(u8("样本 %1 条 · 时间序 8:2 验证 · 禁止随机打乱 · 只写分析表，不改订单与余额")
+        mlWeather_->setText(u8("当地天气\n") + rep.value("weather").toString());
+        mlHint_->setText(u8("预测模型 %1 · 样本 %2 条 · 时间序 8:2 验证 · 禁止随机打乱 · 只写分析表，不改订单与余额")
+                             .arg(rep.value("model_version").toString())
                              .arg(rep.value("sample_n").toInt()));
     }
 

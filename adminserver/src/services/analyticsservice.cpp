@@ -3,6 +3,7 @@
  */
 #include "analyticsservice.h"
 #include "database.h"
+#include "tencentapi.h"
 #include <algorithm>
 #include <QDate>
 #include <QDateTime>
@@ -126,8 +127,19 @@ int AnalyticsService::refreshForecast()
     const int wd = QDateTime::currentDateTime().date().dayOfWeek();
     const bool weekend = wd >= 6;
     const QStringList weathers = {QString::fromUtf8("晴"), QString::fromUtf8("多云"), QString::fromUtf8("小雨")};
-    const QString weather = weathers[QDate::currentDate().dayOfYear() % 3];
-    const double wFactor = weather == QString::fromUtf8("小雨") ? 0.90 : (weekend ? 0.88 : 1.08);
+    QString weather = weathers[QDate::currentDate().dayOfYear() % 3];
+    double wFactor = weather == QString::fromUtf8("小雨") ? 0.90 : (weekend ? 0.88 : 1.08);
+    double lat = 39.9644, lng = 116.3473;
+    const auto home = db_->one("SELECT lat, lng FROM station ORDER BY id LIMIT 1");
+    if (!home.isEmpty()) {
+        lat = home.value("lat").toDouble();
+        lng = home.value("lng").toDouble();
+    }
+    const TencentApi::Weather wx = TencentApi::weatherNow(lat, lng);
+    if (wx.ok) {
+        weather = wx.detail.isEmpty() ? wx.text : wx.detail;
+        wFactor = wx.factor;
+    }
 
     db_->execute("DELETE FROM hourly_load");
     db_->execute("DELETE FROM load_forecast");
@@ -297,7 +309,8 @@ int AnalyticsService::refreshForecast()
                       QString::fromUtf8("历史完成订单不足，预测置信度有限，已回退到小时均值+时段因子"), t});
     db_->execute("INSERT INTO analysis_alert(level,title,detail,created_at) VALUES(?,?,?,?)",
                  {QString::fromUtf8("提示"), QString::fromUtf8("天气因子已融合"),
-                  QString::fromUtf8("当前模拟天气：") + weather + QString::fromUtf8("，负荷系数 ") + QString::number(wFactor, 'f', 2), t});
+                  (wx.ok ? QString::fromUtf8("当前天气：") : QString::fromUtf8("当前模拟天气："))
+                      + weather + QString::fromUtf8("，负荷系数 ") + QString::number(wFactor, 'f', 2), t});
 
     db_->execute(
         "INSERT INTO analysis_report(model_version,mae,rmse,sample_n,weather,created_at) VALUES(?,?,?,?,?,?)",

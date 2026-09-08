@@ -8,7 +8,7 @@
  * 【职责】画界面、做格式校验、把页面操作交给 UserController；不写 SQLite。
  * 【原理】root_ 两页（登录 / 主壳）；pages_ 里各业务页。网络状态由 UserController 管理。
  *         回包统一 onResp：失败弹 UiSheet；PUSH_CHARGE 只刷新充电页。
- * 【协作】依赖 UserController、uidialog。地图用 HTTP 拉腾讯静态图，不经过管理端业务。
+ * 【协作】依赖 UserController、uidialog。地图默认 OSM/Carto 瓦片（无日配额），不经过管理端业务。
  * 【联调】服务器填管理端底栏 IP:8888；本机自测 127.0.0.1:8888。
  * 【详见】docs/模块与协作说明.md
  */
@@ -21,7 +21,6 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QList>
-#include <QListWidget>
 #include <QMainWindow>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -47,8 +46,18 @@ public:
     explicit UserWindow(QWidget *parent = nullptr);
 
 private slots:
-    /** 按地址关键字和半径发 QUERY_STATIONS，data 带当前 coord()。 */
+    /** 按地址或 GPS 坐标发 QUERY_STATIONS。 */
     void queryStations();
+    /** 登录后弹出位置授权；同意才采集坐标。 */
+    void askLocationConsent();
+    /** 先 Windows 定位，不准再地图选点，按经纬度找最近桩。 */
+    void startLocate();
+    /** 调 Windows 定位服务（Wi-Fi/系统定位）。 */
+    void tryWindowsLocate();
+    /** 在地图上点选当前位置；确定则按该点找桩。 */
+    bool pickMyLocation();
+    /** 把选好的点记为导航/找桩起点。 */
+    void applyGpsFix(double lat, double lng, const QString &place);
     /**
      * 处理所有 Socket 回包与 PUSH_CHARGE。
      * code≠0 弹窗（登录失败才退回登录页）；成功按 type 分支刷新对应页。
@@ -60,7 +69,7 @@ private:
     QJsonObject coord() const;
     /** 用控制器中的用户快照刷新顶栏余额和头像。 */
     void applyUser(const QJsonObject &u);
-    /** 登录成功：root_ 切到主壳，拉一次电站列表。 */
+    /** 登录成功：root_ 切到主壳，再问位置授权。 */
     void showShell();
     /** 左边导航点第 i 项：切 pages_，必要时发 LIST_ORDERS / LIST_RESERVATIONS。 */
     void switchTab(int i);
@@ -89,13 +98,14 @@ private:
     void setReviewStars(int n);
     /** 文字不能空，发 REVIEW_STATION（stationId/pileId/score/comment）。 */
     void submitReview();
-    /** 弹出地图+地址+导航入口；静态图走腾讯 HTTP，不经 Dispatch。 */
+    /** 弹出地图+天气+路线；静态图和天气走腾讯 HTTP，不经 Dispatch。 */
     void showStationLocation(const QJsonObject &station);
-    /** 打开系统浏览器或地图 App 做导航（经纬度来自电站）。 */
+    /** 找站成功后按当前定位拉天气，写到附近电站页。 */
+    void fetchLocalWeather();
+    /** 打开导航弹窗：从用户当前位置到电站。 */
     void openNav(const QJsonObject &station);
     /**
-     * 向腾讯路线规划 API 问开车/步行预估时间和距离。
-     * 结果写进 resultLabel；失败只改标签，不影响订单。
+     * 按用户当前经纬度到电站估算路程时间；开始导航走高德/OSM，不经 Dispatch。
      */
     void queryTencentRoute(const QJsonObject &station, const QString &mode,
                            QLabel *resultLabel, QPushButton *queryButton);
@@ -114,7 +124,7 @@ private:
 
     /** 登录页：服务器地址、手机、密码、注册确认。 */
     QWidget *buildLogin();
-    /** 主壳：左边导航 + 顶栏 + pages_。 */
+    /** 主壳：顶栏 + pages_ + 底部 Tab。 */
     QWidget *buildShell();
     /** 找站页：地址、半径、电站列表。 */
     QWidget *buildHome();
@@ -133,9 +143,13 @@ private:
     /** 清空布局里的控件，重新 render 前用。 */
     static void clearBox(QLayout *lay);
 
+    /** 底部 Tab 高亮，行号与 pages_ 映射不变。 */
+    void highlightTab(int pageIndex);
+
     UserController controller_;
     QNetworkAccessManager *mapNetwork_ = nullptr; ///< 仅腾讯地图 HTTP
     QJsonObject currentStation_;                  ///< 点进去的那座站
+    QJsonObject currentOrder_;                    ///< 充电页正在看的订单
     QJsonObject currentPile_;                     ///< 评价页正在看的桩
     int reviewStars_ = 5;
 
@@ -148,8 +162,12 @@ private:
     QComboBox *radius_ = nullptr;
     QLineEdit *addrEdit_ = nullptr;
     QLabel *locMatch_ = nullptr;
+    QLabel *weatherHint_ = nullptr;
     double locLat_ = 39.9644;
     double locLng_ = 116.3473;
+    bool useGps_ = false;
+    bool pendingConsent_ = false;
+    QString gpsPlace_;
     QComboBox *pileType_ = nullptr;
     QVBoxLayout *stationBox_ = nullptr;
     QLabel *pileTitle_ = nullptr;
@@ -165,7 +183,7 @@ private:
     QLabel *meBal_ = nullptr;
     QLineEdit *nickEdit_ = nullptr;
     QLineEdit *payEdit_ = nullptr;
-    QListWidget *nav_ = nullptr;
+    QList<QPushButton *> tabBtns_;
 
     QLabel *rvTitle_ = nullptr;
     QLabel *rvStars_ = nullptr;

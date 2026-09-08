@@ -9,3 +9,5 @@ docs/*.log
 docs/_vm*
 __pycache__/
 *.pyc
+tencentmap_credentials.h
+common/tencent_credentials.h

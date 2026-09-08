@@ -1,6 +1,6 @@
 #!/bin/bash
-# 同步源码 → 编译 → 安装到 ~/ChargeHub-Linux → 打开三个窗口
-# 不要在共享盘上直接 make。请在 Ubuntu 里执行本脚本。
+# 同步源码 → 编译 → 安装到 ~/ChargeHub-Linux。
+# 作业窗口已开时不要跑本脚本（会 pkill）。只改用户端请用 wslbuildlocal.sh useronly。
 set -e
 
 if [ "$(id -u)" -eq 0 ]; then
@@ -95,5 +95,5 @@ EOF
   cp -a "$DST/dashboard/." "$APP/dashboard/"
   chown -R "$TARGET_USER:$TARGET_USER" "$APP" "$DST" 2>/dev/null || true
   echo "编好了。Windows 上双击 scripts/打开运营后台.bat 和 scripts/打开用户端.bat"
-  echo UI_OK
+  echo BUILD_OK
 } > "$LOG" 2>&1

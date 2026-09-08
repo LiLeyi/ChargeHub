@@ -35,7 +35,7 @@
 | REGISTER | 否 | phone, password | 已注销手机号 409 |
 | UPDATE_PROFILE | 是 | nickname / avatarBase64 / clearAvatar / address | 改资料；住址会解析坐标 |
 | RECHARGE | 是 | amount | 模拟充值 |
-| QUERY_STATIONS | 是 | address, radiusKm, lat, lng | 附近电站 + nearbyPiles |
+| QUERY_STATIONS | 是 | address, radiusKm, lat, lng；可选 useGps, placeName | 附近电站 + nearbyPiles。`useGps=true` 时按 lat/lng 算距离，不解析 address |
 | QUERY_PILES | 是 | stationId | 站内电桩 |
 | START_CHARGE | 是 | pileId | 开始充电 |
 | CHARGE_STATUS | 是 | | 进行中/待结算实时计费 |
@@ -52,7 +52,7 @@
 | HEARTBEAT | 是 | | 保活，并刷新 token；同一 TCP 连接断开后 60 秒未重连，管理端会把该用户「充电中」订单收成待结算并释放电桩 |
 | PUSH_CHARGE | （服务端推送） | 与 CHARGE_STATUS 相同的 data.order | **不是请求**。充电中每约 5 秒推一次。`seq=0`。旧客户端可忽略。`CHARGE_STATUS` 轮询仍可用 |
 
-`CHARGE_STATUS` / `PUSH_CHARGE` / 开充停充回包里的 `order` 仍含 `amount`、`energyKwh`、`pricePerKwh`（元）。`amount = startupFee + energyFee`，当前固定 `startupFee=1.00`；`pricePerKwh` 仅表示电量单价，不摊入起步价。有分时电价时额外带可选字段 `currentPrice`、`tariffLabel`（峰/平/谷）。没有规则时按 `station.price_per_kwh`。
+`CHARGE_STATUS` / `PUSH_CHARGE` / 开充停充回包里的 `order` 仍含 `amount`、`energyKwh`、`pricePerKwh`（元）。`amount = startupFee + energyFee`，当前固定 `startupFee=1.00`（可选字段）；`pricePerKwh` 仅表示电量单价，不摊入起步价。有分时电价时额外带可选字段 `currentPrice`、`tariffLabel`（峰/平/谷）。没有规则时按 `station.price_per_kwh`。旧客户端不读 `startupFee` 仍按 `amount` 显示总价。
 
 Token 会写入 `session` 表：管理端重启后 30 分钟内，旧 token 仍可继续用，不必人人重登。
 

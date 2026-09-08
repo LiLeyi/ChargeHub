@@ -37,15 +37,13 @@ OrdersPage::OrdersPage(QWidget *parent)
     : QWidget(parent)
 {
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(24, 18, 24, 16);
-    layout->setSpacing(12);
+    layout->setContentsMargins(16, 8, 16, 8);
+    layout->setSpacing(10);
 
     filter_ = new QComboBox;
     filter_->addItems({QString::fromUtf8("全部订单"), QString::fromUtf8("待结算优先"),
                        QString::fromUtf8("已完成"), QString::fromUtf8("充电中")});
-    filter_->setMinimumWidth(160);
-    filter_->setMaximumWidth(220);
-    filter_->setMinimumHeight(36);
+    filter_->setMinimumHeight(32);
     filter_->setMaxVisibleItems(8);
     auto *view = new QListView(filter_);
     view->setUniformItemSizes(true);
@@ -63,7 +61,7 @@ OrdersPage::OrdersPage(QWidget *parent)
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     scroll->setWidget(inner);
     layout->addWidget(scroll, 1);
 }

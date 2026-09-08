@@ -22,7 +22,8 @@ SOURCES += \
     src/tcpserver.cpp \
     src/chartwidget.cpp \
     src/mainwindow.cpp \
-    ../common/protocol.cpp
+    ../common/protocol.cpp \
+    ../common/tencentapi.cpp
 
 HEADERS += \
     src/database.h \
@@ -42,7 +43,8 @@ HEADERS += \
     src/mainwindow.h \
     ../common/protocol.h \
     ../common/appstyle.h \
-    ../common/uidialog.h
+    ../common/uidialog.h \
+    ../common/tencentapi.h
 
 unix {
     QMAKE_CXXFLAGS += -finput-charset=UTF-8

@@ -24,6 +24,8 @@ signals:
 private:
     QLabel *status_ = nullptr;
     QLabel *time_ = nullptr;
+    QLabel *energy_ = nullptr;
+    QLabel *fee_ = nullptr;
     QLabel *info_ = nullptr;
     QPushButton *stopButton_ = nullptr;
     QPushButton *settleButton_ = nullptr;
