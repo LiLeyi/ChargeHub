@@ -65,11 +65,16 @@ void ChargePage::setOrder(const QJsonObject &order)
     time_->setText(QString("%1:%2")
                        .arg(seconds / 60, 2, 10, QChar('0'))
                        .arg(seconds % 60, 2, 10, QChar('0')));
-    info_->setText(QString::fromUtf8("%1  %2\n订单 %3\n电量 %4 kWh\n费用 ¥%5\n%6 kW × %7 元/度")
+    const double startupFee = order.value("startupFee").toDouble();
+    const QString feeDetail = startupFee > 0
+        ? QString::fromUtf8("（含起步价 ¥%1）").arg(startupFee, 0, 'f', 2)
+        : QString();
+    info_->setText(QString::fromUtf8("%1  %2\n订单 %3\n电量 %4 kWh\n费用 ¥%5 %6\n%7 kW × %8 元/度")
                        .arg(order.value("stationName").toString(), order.value("pileNo").toString())
                        .arg(order.value("orderNo").toString())
                        .arg(order.value("energyKwh").toDouble(), 0, 'f', 3)
                        .arg(order.value("amount").toDouble(), 0, 'f', 2)
+                       .arg(feeDetail)
                        .arg(order.value("powerKw").toDouble(), 0, 'f', 0)
                        .arg(order.value("pricePerKwh").toDouble(), 0, 'f', 2));
     stopButton_->setVisible(status == QString::fromUtf8("充电中"));

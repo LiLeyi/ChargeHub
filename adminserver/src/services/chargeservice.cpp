@@ -11,6 +11,9 @@
 #include <QtMath>
 
 namespace {
+// 固定起步价以“分”保存，避免浮点累加造成 0.01 元误差。
+// 每张订单只在 calculateLive() 中加一次；停充落库和结算均复用该结果。
+constexpr qint64 kStartupFeeFen = 100;
 qint64 fenOf(double yuan) { return qRound(yuan * 100.0); }
 double money(double yuan) { return fenOf(yuan) / 100.0; }
 double moneyFen(qint64 fen) { return fen / 100.0; }
@@ -61,7 +64,7 @@ QJsonObject ChargeService::calculateLive(const QVariantMap &order, const QVarian
         return QString();
     };
     double energy = 0;
-    qint64 fen = 0;
+    qint64 energyFeeFen = 0;
     if (start.isValid() && end.isValid() && end > start) {
         QDateTime cursor = start;
         while (cursor < end) {
@@ -72,19 +75,24 @@ QJsonObject ChargeService::calculateLive(const QVariantMap &order, const QVarian
             const int segmentSeconds = qMax(0, int(cursor.secsTo(hourEnd)));
             const double segmentEnergy = power * (segmentSeconds / 3600.0);
             energy += segmentEnergy;
-            fen += fenOf(segmentEnergy * priceAt(cursor.time().hour()));
+            energyFeeFen += fenOf(segmentEnergy * priceAt(cursor.time().hour()));
             cursor = hourEnd;
         }
     }
     energy = qRound(energy * 1000) / 1000.0;
-    const double amount = moneyFen(fen);
+    const double energyFee = moneyFen(energyFeeFen);
+    const double startupFee = moneyFen(kStartupFeeFen);
+    const double amount = moneyFen(kStartupFeeFen + energyFeeFen);
     const int currentHour = QDateTime::currentDateTime().time().hour();
     const double currentPrice = priceAt(currentHour);
     return {{"seconds", seconds},
             {"energyKwh", energy},
             {"amount", amount},
+            {"startupFee", startupFee},
+            {"energyFee", energyFee},
             {"powerKw", power},
-            {"pricePerKwh", energy > 1e-9 ? money(amount / energy) : currentPrice},
+            // 单价仅表示电量费，固定起步价不摊入每度电单价。
+            {"pricePerKwh", energy > 1e-9 ? money(energyFee / energy) : currentPrice},
             {"currentPrice", currentPrice},
             {"tariffLabel", labelAt(currentHour)}};
 }
@@ -111,8 +119,8 @@ QJsonObject ChargeService::start(const QVariantMap &user, const QJsonObject &dat
     const int userId = user.value("id").toInt();
     if (!openOrder(userId).isEmpty())
         return {{"errorCode", 409}, {"error", QString::fromUtf8("您有未完成的充电订单，请先结算")}};
-    if (user.value("balance").toDouble() <= 0)
-        return {{"errorCode", 402}, {"error", QString::fromUtf8("余额不足，请先充值")}};
+    if (fenOf(user.value("balance").toDouble()) < kStartupFeeFen)
+        return {{"errorCode", 402}, {"error", QString::fromUtf8("余额不足以支付 ¥1.00 起步价，请先充值")}};
     const int pileId = data.value("pileId").toInt();
     auto pile = db_->one("SELECT * FROM pile WHERE id=?", {pileId});
     if (pile.isEmpty())

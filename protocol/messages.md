@@ -52,7 +52,7 @@
 | HEARTBEAT | 是 | | 保活，并刷新 token；同一 TCP 连接断开后 60 秒未重连，管理端会把该用户「充电中」订单收成待结算并释放电桩 |
 | PUSH_CHARGE | （服务端推送） | 与 CHARGE_STATUS 相同的 data.order | **不是请求**。充电中每约 5 秒推一次。`seq=0`。旧客户端可忽略。`CHARGE_STATUS` 轮询仍可用 |
 
-`CHARGE_STATUS` / `PUSH_CHARGE` / 开充停充回包里的 `order` 仍含 `amount`、`energyKwh`、`pricePerKwh`（元）。有分时电价时额外带可选字段 `currentPrice`、`tariffLabel`（峰/平/谷）。没有规则时行为与原来一样，按 `station.price_per_kwh`。
+`CHARGE_STATUS` / `PUSH_CHARGE` / 开充停充回包里的 `order` 仍含 `amount`、`energyKwh`、`pricePerKwh`（元）。`amount = startupFee + energyFee`，当前固定 `startupFee=1.00`；`pricePerKwh` 仅表示电量单价，不摊入起步价。有分时电价时额外带可选字段 `currentPrice`、`tariffLabel`（峰/平/谷）。没有规则时按 `station.price_per_kwh`。
 
 Token 会写入 `session` 表：管理端重启后 30 分钟内，旧 token 仍可继续用，不必人人重登。
 

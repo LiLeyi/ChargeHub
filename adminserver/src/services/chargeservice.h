@@ -27,6 +27,10 @@ public:
     void releaseStaleSession(int userId);
 
 private:
+    /**
+     * 统一实时计费入口：总费用 = 固定 ¥1.00 起步价 + 按小时切段的电量费。
+     * START/STATUS/PUSH/STOP/SETTLE 必须共用此结果，保证展示金额与落库扣款一致。
+     */
     QJsonObject calculateLive(const QVariantMap &order, const QVariantMap &pile,
                               const QVariantMap &station) const;
     static QJsonObject publicOrder(const QVariantMap &order, const QVariantMap &pile,
