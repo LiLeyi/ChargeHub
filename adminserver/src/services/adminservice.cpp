@@ -91,28 +91,43 @@ QString AdminService::rebootPile(int pileId)
     return msg;
 }
 
-void AdminService::freezeUser(int userId, bool freeze)
+QString AdminService::freezeUser(int userId, bool freeze)
 {
     auto u = db_->one("SELECT * FROM user WHERE id=?", {userId});
     if (u.isEmpty() || u.value("status").toString() == QString::fromUtf8("注销"))
-        return;
+        return QString::fromUtf8("用户不存在或账号已注销");
     if (freeze) {
         auto order = charges_->openOrder(userId);
-        if (!order.isEmpty() && order.value("status").toString() == QString::fromUtf8("充电中"))
-            charges_->stop(u);
-        db_->execute("UPDATE user SET status=?, close_reason=?, closed_at=? WHERE id=?",
-                     {QString::fromUtf8("冻结"), QString::fromUtf8("管理员冻结"), nowStr(), userId});
+        if (!order.isEmpty() && order.value("status").toString() == QString::fromUtf8("充电中")) {
+            const QJsonObject stopped = charges_->stop(u);
+            if (stopped.contains("error"))
+                return QString::fromUtf8("冻结失败：%1").arg(stopped.value("error").toString());
+        }
+        const bool ok = db_->transaction([&] {
+            if (db_->execute("UPDATE user SET status=?, close_reason=?, closed_at=? WHERE id=?",
+                             {QString::fromUtf8("冻结"), QString::fromUtf8("管理员冻结"), nowStr(), userId}) < 0)
+                return false;
+            return db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
+                                {"admin", QString::fromUtf8("冻结用户"), u.value("phone"),
+                                 QString::fromUtf8("成功"), nowStr()}) >= 0;
+        });
+        if (!ok)
+            return QString::fromUtf8("冻结失败，数据库未写入");
         sessions_->dropUser(userId);
-        db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
-                     {"admin", QString::fromUtf8("冻结用户"), u.value("phone"), QString::fromUtf8("成功"), nowStr()});
+        return QString::fromUtf8("用户已冻结");
     } else {
         // QString() 是 null QString，QSQLITE 会将其绑定为 SQL NULL；而
         // close_reason/closed_at 均为 NOT NULL。必须传非 null 的空字符串，
         // 否则 UPDATE 整句失败，status 会继续停留在“冻结”。
-        db_->execute("UPDATE user SET status=?, close_reason=?, closed_at=? WHERE id=?",
-                     {QString::fromUtf8("正常"), QStringLiteral(""), QStringLiteral(""), userId});
-        db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
-                     {"admin", QString::fromUtf8("解冻用户"), u.value("phone"), QString::fromUtf8("成功"), nowStr()});
+        const bool ok = db_->transaction([&] {
+            if (db_->execute("UPDATE user SET status=?, close_reason=?, closed_at=? WHERE id=?",
+                             {QString::fromUtf8("正常"), QStringLiteral(""), QStringLiteral(""), userId}) < 0)
+                return false;
+            return db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
+                                {"admin", QString::fromUtf8("解冻用户"), u.value("phone"),
+                                 QString::fromUtf8("成功"), nowStr()}) >= 0;
+        });
+        return ok ? QString::fromUtf8("用户已解冻") : QString::fromUtf8("解冻失败，数据库未写入");
     }
 }
 
@@ -120,12 +135,18 @@ int AdminService::addStation(const QVariantMap &data)
 {
     const QString name = data.value("name").toString().trimmed();
     const QString address = data.value("address").toString().trimmed();
+    const double lng = data.value("lng").toDouble();
+    const double lat = data.value("lat").toDouble();
+    const double price = data.value("pricePerKwh", 1.3).toDouble();
+    if (name.isEmpty() || address.isEmpty() || lng < -180.0 || lng > 180.0
+        || lat < -90.0 || lat > 90.0 || price <= 0)
+        return 0;
     int sid = 0;
     const int n = qBound(1, data.value("pileCount", 4).toInt(), 20);
-    db_->transaction([&] {
+    const bool ok = db_->transaction([&] {
         sid = db_->execute(
             "INSERT INTO station(name,address,lng,lat,price_per_kwh) VALUES(?,?,?,?,?)",
-            {name, address, data.value("lng"), data.value("lat"), data.value("pricePerKwh", 1.3)});
+            {name, address, lng, lat, price});
         if (sid <= 0)
             return false;
         for (int i = 1; i <= n; ++i) {
@@ -139,9 +160,9 @@ int AdminService::addStation(const QVariantMap &data)
         }
         return true;
     });
-    if (sid > 0)
+    if (ok && sid > 0)
         applyDefaultTariff(sid);
-    return sid;
+    return ok ? sid : 0;
 }
 
 QString AdminService::applyDefaultTariff(int stationId)
@@ -245,7 +266,6 @@ QVector<QVariantMap> AdminService::listAdminOrders(const QString &keyword) const
         "SELECT o.*, u.phone, p.pile_no, s.name AS station_name FROM charge_order o "
         "JOIN user u ON u.id=o.user_id JOIN pile p ON p.id=o.pile_id "
         "JOIN station s ON s.id=p.station_id "
-        "WHERE o.order_no LIKE ? OR u.phone LIKE ? ORDER BY o.id DESC LIMIT 80",
-        {"%" + keyword + "%", "%" + keyword + "%"});
+        "WHERE o.order_no LIKE ? OR u.phone LIKE ? OR p.pile_no LIKE ? ORDER BY o.id DESC LIMIT 80",
+        {"%" + keyword + "%", "%" + keyword + "%", "%" + keyword + "%"});
 }
-

@@ -22,7 +22,8 @@ public:
     QVector<QVariantMap> listUsers(const QString &keyword) const;
     /** 设备、用户和站点写操作；每次操作维持原审计日志语义。 */
     QString rebootPile(int pileId);
-    void freezeUser(int userId, bool freeze);
+    /** 返回界面可直接显示的操作结果，写库失败不会误报成功。 */
+    QString freezeUser(int userId, bool freeze);
     int addStation(const QVariantMap &data);
     QString applyDefaultTariff(int stationId);
     QString adoptDispatchPlan(int planId);

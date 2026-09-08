@@ -153,7 +153,7 @@ public:
      * 冻结 / 解冻。注销账号不可再冻。冻结时 dropUser 作废全部 token。
      * 写 user.status、audit_log。
      */
-    void freezeUser(int userId, bool freeze);
+    QString freezeUser(int userId, bool freeze);
 
     /**
      * 新建电站，并按 data["pileCount"] 生成闲置桩。

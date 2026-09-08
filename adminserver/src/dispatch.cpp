@@ -165,7 +165,7 @@ QVector<QVariantMap> Dispatch::listStations() const
     return admin_->listStations();
 }
 
-/** 按手机号或昵称检索用户。 */
+/** 按手机号检索用户。 */
 QVector<QVariantMap> Dispatch::listUsers(const QString &keyword) const
 {
     return admin_->listUsers(keyword);
@@ -178,9 +178,9 @@ QString Dispatch::rebootPile(int pileId)
 }
 
 /** 冻结则 dropUser；注销账号不能再改状态。 */
-void Dispatch::freezeUser(int userId, bool freeze)
+QString Dispatch::freezeUser(int userId, bool freeze)
 {
-    admin_->freezeUser(userId, freeze);
+    return admin_->freezeUser(userId, freeze);
 }
 
 /** 插 station，再按 pileCount 生成闲置桩。 */

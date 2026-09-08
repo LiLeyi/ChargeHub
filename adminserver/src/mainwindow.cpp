@@ -433,7 +433,6 @@ MainWindow::MainWindow(Dispatch *dispatch, QWidget *parent)
     auto *timer = new QTimer(this);
     connect(timer, &QTimer::timeout, this, &MainWindow::refresh);
     timer->start(4000);
-    dispatch_->refreshForecast();
     refresh();
 }
 
@@ -707,7 +706,8 @@ void MainWindow::freeze(bool on)
         uiWarn(this, u8("提示"), u8("该账号已注销留档，不能再冻结或解冻"));
         return;
     }
-    dispatch_->freezeUser(userTable_->item(row, 0)->text().toInt(), on);
+    uiInfo(this, on ? u8("冻结用户") : u8("解冻用户"),
+           dispatch_->freezeUser(userTable_->item(row, 0)->text().toInt(), on));
     refresh();
 }
 
@@ -763,14 +763,29 @@ void MainWindow::addStation()
     dlg.addOk(u8("创建电站"));
     if (dlg.exec() != QDialog::Accepted)
         return;
+    bool lngOk = false;
+    bool latOk = false;
+    const double lngValue = lng->text().toDouble(&lngOk);
+    const double latValue = lat->text().toDouble(&latOk);
+    if (name->text().trimmed().isEmpty() || addr->text().trimmed().isEmpty()
+        || !lngOk || !latOk || lngValue < -180.0 || lngValue > 180.0
+        || latValue < -90.0 || latValue > 90.0) {
+        uiWarn(this, u8("创建失败"), u8("站名和地址不能为空，经纬度必须在有效范围内"));
+        return;
+    }
     QVariantMap data;
     data["name"] = name->text();
     data["address"] = addr->text();
-    data["lng"] = lng->text().toDouble();
-    data["lat"] = lat->text().toDouble();
+    data["lng"] = lngValue;
+    data["lat"] = latValue;
     data["pileCount"] = n->value();
     data["pricePerKwh"] = price->value();
-    dispatch_->addStation(data);
+    const int stationId = dispatch_->addStation(data);
+    if (stationId <= 0) {
+        uiWarn(this, u8("创建失败"), u8("电站或电桩未写入，请检查数据库后重试"));
+        return;
+    }
+    uiInfo(this, u8("新增电站"), u8("创建成功，电站编号为 %1").arg(stationId));
     refresh();
 }
 
