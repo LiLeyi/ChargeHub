@@ -1,6 +1,7 @@
 #include "chargeservice.h"
 
 #include "database.h"
+#include "reservationservice.h"
 #include "sessionservice.h"
 
 #include <QDateTime>
@@ -16,21 +17,10 @@ double moneyFen(qint64 fen) { return fen / 100.0; }
 QString nowStr() { return QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"); }
 }
 
-ChargeService::ChargeService(Database *db, SessionService *sessions)
-    : db_(db), sessions_(sessions)
+ChargeService::ChargeService(Database *db, SessionService *sessions,
+                             ReservationService *reservations)
+    : db_(db), sessions_(sessions), reservations_(reservations)
 {
-}
-
-void ChargeService::expireReservations() const
-{
-    db_->execute("UPDATE reservation SET status=?, no_show=1 WHERE status=? AND expire_at < ?",
-                 {QString::fromUtf8("已取消"), QString::fromUtf8("有效"), nowStr()});
-}
-
-QVariantMap ChargeService::activeReservation(int pileId) const
-{
-    return db_->one("SELECT * FROM reservation WHERE pile_id=? AND status='有效' ORDER BY id DESC LIMIT 1",
-                    {pileId});
 }
 
 QVariantMap ChargeService::openOrder(int userId) const
@@ -117,7 +107,7 @@ QJsonObject ChargeService::publicOrder(const QVariantMap &order, const QVariantM
 
 QJsonObject ChargeService::start(const QVariantMap &user, const QJsonObject &data)
 {
-    expireReservations();
+    reservations_->expire();
     const int userId = user.value("id").toInt();
     if (!openOrder(userId).isEmpty())
         return {{"errorCode", 409}, {"error", QString::fromUtf8("您有未完成的充电订单，请先结算")}};
@@ -131,7 +121,7 @@ QJsonObject ChargeService::start(const QVariantMap &user, const QJsonObject &dat
         return {{"errorCode", 409}, {"error", QString::fromUtf8("电桩故障，请选择其他电桩")}};
     if (pile.value("status").toString() == QString::fromUtf8("在用"))
         return {{"errorCode", 409}, {"error", QString::fromUtf8("电桩正在使用中")}};
-    const auto reservation = activeReservation(pileId);
+    const auto reservation = reservations_->activeForPile(pileId);
     if (!reservation.isEmpty() && reservation.value("user_id").toInt() != userId)
         return {{"errorCode", 409}, {"error", QString::fromUtf8("该桩已被他人预约")}};
     const auto station = db_->one("SELECT * FROM station WHERE id=?", {pile.value("station_id")});
@@ -154,9 +144,7 @@ QJsonObject ChargeService::start(const QVariantMap &user, const QJsonObject &dat
             if (db_->execute("UPDATE pile SET status=?, last_seen_at=? WHERE id=?",
                              {QString::fromUtf8("在用"), timestamp, pileId}) < 0)
                 return false;
-            return reservation.isEmpty()
-                || db_->execute("UPDATE reservation SET status=? WHERE id=?",
-                                {QString::fromUtf8("已履约"), reservation.value("id")}) >= 0;
+            return reservation.isEmpty() || reservations_->fulfill(reservation.value("id").toInt());
         }))
         return {{"errorCode", 409}, {"error", QString::fromUtf8("开充未成功，请确认没有未完成订单且电桩空闲")}};
     const auto order = db_->one("SELECT * FROM charge_order WHERE id=?", {orderId});

@@ -25,6 +25,7 @@
 class Database;
 class ChargeService;
 class RequestDispatcher;
+class ReservationService;
 class SessionService;
 
 class Dispatch {
@@ -183,6 +184,7 @@ public:
 private:
     Database *db_;
     std::unique_ptr<SessionService> sessions_;
+    std::unique_ptr<ReservationService> reservations_;
     std::unique_ptr<ChargeService> charges_;
     std::unique_ptr<RequestDispatcher> requestDispatcher_;
 
@@ -221,18 +223,6 @@ private:
 
     /** 当前用户充值流水。被 handle(LIST_RECHARGE) 调用。 */
     QJsonObject listRecharge(const QVariantMap &user);
-    /** 当前用户预约列表（会先过期处理）。被 handle(LIST_RESERVATIONS) 调用。 */
-    QJsonObject listReservations(const QVariantMap &user);
-
-    /**
-     * 预约空闲桩。桩须闲置且无他人有效预约；写入 reservation(有效)。
-     * 被 handle(RESERVE_PILE) 调用。
-     */
-    QJsonObject reservePile(const QVariantMap &user, const QJsonObject &data);
-
-    /** 取消本人当前有效预约。被 handle(CANCEL_RESERVE) 调用。 */
-    QJsonObject cancelReserve(const QVariantMap &user);
-
     /**
      * 提交评价：必须有文字。写 station_review，并浅层关键词情感写入 review_doc。
      * 被 handle(REVIEW_STATION) 调用。
@@ -242,12 +232,6 @@ private:
     /** 某桩的评价列表与均分、情感摘要。被 handle(LIST_PILE_REVIEWS) 调用。 */
     QJsonObject listPileReviews(const QVariantMap &user, const QJsonObject &data);
 
-    /** 把已过 expire_at 且仍「有效」的预约标 no_show，别人就能用这根桩。 */
-    void expireReservations() const;
-    /** 该桩当前仍有效的预约行；没有则空 map。 */
-    QVariantMap activeReserve(int pileId) const;
-    /** 桩状态为闲置，且当前没有任何有效预约。开充对「预约就是你」另判。 */
-    bool pileIsIdle(const QVariantMap &pile) const;
 };
 
 #endif

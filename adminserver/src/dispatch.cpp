@@ -9,6 +9,7 @@
 
 #include "database.h"
 #include "services/chargeservice.h"
+#include "services/reservationservice.h"
 #include "services/sessionservice.h"
 #include "transport/requestdispatcher.h"
 
@@ -191,7 +192,8 @@ ServiceResult legacyResult(QJsonObject body, const QString &message = QStringLit
 Dispatch::Dispatch(Database *db)
     : db_(db),
       sessions_(std::make_unique<SessionService>(db)),
-      charges_(std::make_unique<ChargeService>(db, sessions_.get())),
+      reservations_(std::make_unique<ReservationService>(db)),
+      charges_(std::make_unique<ChargeService>(db, sessions_.get(), reservations_.get())),
       requestDispatcher_(std::make_unique<RequestDispatcher>(sessions_.get()))
 {
     registerRoutes();
@@ -249,13 +251,13 @@ void Dispatch::registerRoutes()
         return SR::ok(listRecharge(u));
     });
     add("LIST_RESERVATIONS", false, [this](const QVariantMap &u, const QJsonObject &) {
-        return SR::ok(listReservations(u));
+        return SR::ok(reservations_->list(u));
     });
     add("RESERVE_PILE", true, [this](const QVariantMap &u, const QJsonObject &d) {
-        return legacyResult(reservePile(u, d), QString::fromUtf8("预约成功，15分钟内有效"));
+        return legacyResult(reservations_->reserve(u, d), QString::fromUtf8("预约成功，15分钟内有效"));
     });
     add("CANCEL_RESERVE", true, [this](const QVariantMap &u, const QJsonObject &) {
-        return legacyResult(cancelReserve(u), QString::fromUtf8("已取消预约"));
+        return legacyResult(reservations_->cancel(u), QString::fromUtf8("已取消预约"));
     });
     add("REVIEW_STATION", false, [this](const QVariantMap &u, const QJsonObject &d) {
         QJsonObject body = reviewStation(u, d);
@@ -355,7 +357,7 @@ QJsonObject Dispatch::recharge(const QVariantMap &user, const QJsonObject &data)
 /** 按地址关键字或半径列附近电站，只读 station。 */
 QJsonObject Dispatch::queryStations(const QVariantMap &user, const QJsonObject &data)
 {
-    expireReservations();
+    reservations_->expire();
     const auto stations = db_->query("SELECT * FROM station");
     QString address = data.value("address").toString().trimmed();
     if (address.isEmpty())
@@ -391,7 +393,7 @@ QJsonObject Dispatch::queryStations(const QVariantMap &user, const QJsonObject &
         int idle = 0, fast = 0, slow = 0;
         const double dist = qRound(haversine(lat, lng, s.value("lat").toDouble(), s.value("lng").toDouble()) * 10) / 10.0;
         for (const auto &p : piles) {
-            if (pileIsIdle(p))
+            if (reservations_->pileIsIdle(p))
                 ++idle;
             if (p.value("type").toString() == QString::fromUtf8("快充"))
                 ++fast;
@@ -417,7 +419,7 @@ QJsonObject Dispatch::queryStations(const QVariantMap &user, const QJsonObject &
                     {"stationAddress", s.value("address").toString()},
                     {"distanceKm", dist},
                     {"pricePerKwh", s.value("price_per_kwh").toDouble()},
-                    {"idle", pileIsIdle(p)},
+                    {"idle", reservations_->pileIsIdle(p)},
                 });
             }
         }
@@ -482,9 +484,7 @@ QJsonObject Dispatch::closeAccount(const QVariantMap &user)
     if (!open.isEmpty())
         return QJsonObject{{"errorCode", 409},
                            {"error", QString::fromUtf8("请先结束充电并完成结算，再注销账号")}};
-    auto res = db_->one("SELECT * FROM reservation WHERE user_id=? AND status='有效'", {uid});
-    if (!res.isEmpty())
-        db_->execute("UPDATE reservation SET status=? WHERE id=?", {QString::fromUtf8("已取消"), res.value("id")});
+    reservations_->cancelActiveForUser(uid);
     const QString t = nowStr();
     db_->execute("UPDATE user SET status=?, close_reason=?, closed_at=? WHERE id=?",
                  {QString::fromUtf8("注销"), QString::fromUtf8("用户注销"), t, uid});
@@ -498,7 +498,7 @@ QJsonObject Dispatch::closeAccount(const QVariantMap &user)
 /** 先过期预约，再列出某站的桩及是否可预约/可开充。 */
 QJsonObject Dispatch::queryPiles(const QVariantMap &user, const QJsonObject &data)
 {
-    expireReservations();
+    reservations_->expire();
     const int sid = data.value("stationId").toInt();
     const int uid = user.value("id").toInt();
     auto station = db_->one("SELECT * FROM station WHERE id=?", {sid});
@@ -510,7 +510,7 @@ QJsonObject Dispatch::queryPiles(const QVariantMap &user, const QJsonObject &dat
     for (const auto &p : piles) {
         if (!typeFilter.isEmpty() && p.value("type").toString() != typeFilter)
             continue;
-        auto res = activeReserve(p.value("id").toInt());
+        auto res = reservations_->activeForPile(p.value("id").toInt());
         const bool mine = !res.isEmpty() && res.value("user_id").toInt() == uid;
         QString status = p.value("status").toString();
         if (status == QString::fromUtf8("闲置") && !res.isEmpty() && !mine)
@@ -869,28 +869,6 @@ void Dispatch::releaseStaleSession(int userId)
     charges_->releaseStaleSession(userId);
 }
 
-/** 过期仍「有效」的预约改为已取消并标 no_show。 */
-void Dispatch::expireReservations() const
-{
-    db_->execute("UPDATE reservation SET status=?, no_show=1 WHERE status=? AND expire_at < ?",
-                 {QString::fromUtf8("已取消"), QString::fromUtf8("有效"), nowStr()});
-}
-
-/** 该桩当前仍有效的预约；没有则空。 */
-QVariantMap Dispatch::activeReserve(int pileId) const
-{
-    return db_->one(
-        "SELECT * FROM reservation WHERE pile_id=? AND status='有效' ORDER BY id DESC LIMIT 1", {pileId});
-}
-
-/** 闲置且没有任何有效预约。 */
-bool Dispatch::pileIsIdle(const QVariantMap &pile) const
-{
-    if (pile.value("status").toString() != QString::fromUtf8("闲置"))
-        return false;
-    return activeReserve(pile.value("id").toInt()).isEmpty();
-}
-
 /** 当前用户充值流水。 */
 QJsonObject Dispatch::listRecharge(const QVariantMap &user)
 {
@@ -908,82 +886,6 @@ QJsonObject Dispatch::listRecharge(const QVariantMap &user)
         });
     }
     return QJsonObject{{"records", arr}, {"balance", money(user.value("balance").toDouble())}};
-}
-
-/** 先过期处理，再返回该用户预约。 */
-QJsonObject Dispatch::listReservations(const QVariantMap &user)
-{
-    expireReservations();
-    const auto rows = db_->query(
-        "SELECT r.id, r.pile_id, r.status, r.expire_at, r.created_at, "
-        "p.pile_no, p.type, p.power_kw, p.status AS pile_status, "
-        "s.id AS station_id, s.name AS station_name, s.address, s.lng, s.lat, s.price_per_kwh "
-        "FROM reservation r "
-        "JOIN pile p ON p.id=r.pile_id "
-        "JOIN station s ON s.id=p.station_id "
-        "WHERE r.user_id=? AND r.status='有效' "
-        "ORDER BY r.expire_at, r.id DESC",
-        {user.value("id")});
-
-    QJsonArray arr;
-    const QDateTime now = QDateTime::currentDateTime();
-    for (const auto &r : rows) {
-        const QDateTime expire =
-            QDateTime::fromString(r.value("expire_at").toString(), "yyyy-MM-dd HH:mm:ss");
-        const int remaining = expire.isValid() ? qMax(0, int(now.secsTo(expire))) : 0;
-        arr.append(QJsonObject{
-            {"id", r.value("id").toInt()},
-            {"pileId", r.value("pile_id").toInt()},
-            {"status", r.value("status").toString()},
-            {"expireAt", r.value("expire_at").toString()},
-            {"createdAt", r.value("created_at").toString()},
-            {"remainingSeconds", remaining},
-            {"pileNo", r.value("pile_no").toString()},
-            {"type", r.value("type").toString()},
-            {"powerKw", r.value("power_kw").toDouble()},
-            {"pileStatus", r.value("pile_status").toString()},
-            {"stationId", r.value("station_id").toInt()},
-            {"stationName", r.value("station_name").toString()},
-            {"address", r.value("address").toString()},
-            {"lng", r.value("lng").toDouble()},
-            {"lat", r.value("lat").toDouble()},
-            {"pricePerKwh", r.value("price_per_kwh").toDouble()},
-        });
-    }
-    return QJsonObject{{"reservations", arr}};
-}
-
-/** 闲置且无他人预约才插入 reservation(有效)。 */
-QJsonObject Dispatch::reservePile(const QVariantMap &user, const QJsonObject &data)
-{
-    expireReservations();
-    const int pileId = data.value("pileId").toInt();
-    auto pile = db_->one("SELECT * FROM pile WHERE id=?", {pileId});
-    if (pile.isEmpty())
-        return QJsonObject{{"errorCode", 404}, {"error", QString::fromUtf8("电桩不存在")}};
-    if (pile.value("status").toString() != QString::fromUtf8("闲置"))
-        return QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("仅闲置电桩可预约")}};
-    if (!activeReserve(pileId).isEmpty())
-        return QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("该桩已被预约")}};
-    auto mine = db_->one("SELECT * FROM reservation WHERE user_id=? AND status='有效'", {user.value("id")});
-    if (!mine.isEmpty())
-        return QJsonObject{{"errorCode", 409}, {"error", QString::fromUtf8("您已有有效预约，请先取消或履约")}};
-    const QString expire = QDateTime::currentDateTime().addSecs(15 * 60).toString("yyyy-MM-dd HH:mm:ss");
-    const int rid = db_->execute(
-        "INSERT INTO reservation(user_id,pile_id,status,expire_at,created_at) VALUES(?,?,?,?,?)",
-        {user.value("id"), pileId, QString::fromUtf8("有效"), expire, nowStr()});
-    return QJsonObject{{"reservation", QJsonObject{{"id", rid}, {"pileId", pileId}, {"expireAt", expire}}}};
-}
-
-/** 取消本人当前有效预约。 */
-QJsonObject Dispatch::cancelReserve(const QVariantMap &user)
-{
-    auto row = db_->one("SELECT * FROM reservation WHERE user_id=? AND status='有效' ORDER BY id DESC LIMIT 1",
-                        {user.value("id")});
-    if (row.isEmpty())
-        return QJsonObject{{"errorCode", 404}, {"error", QString::fromUtf8("没有有效预约")}};
-    db_->execute("UPDATE reservation SET status=? WHERE id=?", {QString::fromUtf8("已取消"), row.value("id")});
-    return QJsonObject{};
 }
 
 /** 必须有文字；写 station_review 并浅层情感写入 review_doc。 */

@@ -11,6 +11,7 @@ SOURCES += \
     src/database.cpp \
     src/services/sessionservice.cpp \
     src/services/chargeservice.cpp \
+    src/services/reservationservice.cpp \
     src/transport/requestdispatcher.cpp \
     src/dispatch.cpp \
     src/tcpserver.cpp \
@@ -22,6 +23,7 @@ HEADERS += \
     src/database.h \
     src/services/sessionservice.h \
     src/services/chargeservice.h \
+    src/services/reservationservice.h \
     src/transport/serviceresult.h \
     src/transport/requestdispatcher.h \
     src/dispatch.h \
