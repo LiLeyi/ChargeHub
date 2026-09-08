@@ -47,15 +47,13 @@ QJsonObject AnalyticsService::pileStatusStats() const
         counts[r.value("status").toString()] = r.value("n").toInt();
         total += r.value("n").toInt();
     }
-    if (total == 0)
-        total = 1;
     QJsonArray items;
     const QStringList order = {QString::fromUtf8("在用"), QString::fromUtf8("闲置"), QString::fromUtf8("故障")};
     double acc = 0;
     for (int i = 0; i < order.size(); ++i) {
         const int n = counts.value(order[i]);
-        double pct = qRound(n * 1000.0 / total) / 10.0;
-        if (i == order.size() - 1)
+        double pct = total ? qRound(n * 1000.0 / total) / 10.0 : 0;
+        if (total && i == order.size() - 1)
             pct = qRound((100.0 - acc) * 10) / 10.0;
         else
             acc += pct;
@@ -317,5 +315,4 @@ int AnalyticsService::refreshForecast()
         {QStringLiteral("hour-mean-v1.2"), qRound(mae * 1000) / 1000.0, qRound(rmse * 1000) / 1000.0, sampleN, weather, t});
     return n;
 }
-
 

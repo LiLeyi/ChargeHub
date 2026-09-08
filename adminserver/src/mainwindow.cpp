@@ -6,6 +6,7 @@
 #include "uidialog.h"
 
 #include <algorithm>
+#include <QtMath>
 #include <QAbstractItemView>
 #include <QVector>
 #include <QColor>
@@ -67,6 +68,7 @@ static QTableWidget *makeTable(const QStringList &headers)
     t->setHorizontalHeaderLabels(headers);
     t->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     t->setSelectionBehavior(QAbstractItemView::SelectRows);
+    t->setSelectionMode(QAbstractItemView::SingleSelection);
     t->setAlternatingRowColors(true);
     t->verticalHeader()->setVisible(false);
     t->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -78,6 +80,37 @@ static QTableWidget *makeTable(const QStringList &headers)
     t->setAttribute(Qt::WA_StyledBackground, true);
     t->viewport()->setAutoFillBackground(true);
     return t;
+}
+
+// 自动刷新会重新排序；操作对象必须跟随实体 ID，不能跟随原来的行号。
+static QVariant selectedEntity(QTableWidget *table)
+{
+    const auto *item = table->item(table->currentRow(), 0);
+    return item ? item->data(Qt::UserRole) : QVariant();
+}
+
+static void restoreEntity(QTableWidget *table, const QVariant &id)
+{
+    table->clearSelection();
+    table->setCurrentCell(-1, -1);
+    if (!id.isValid())
+        return;
+    for (int row = 0; row < table->rowCount(); ++row) {
+        const auto *item = table->item(row, 0);
+        if (item && item->data(Qt::UserRole) == id) {
+            table->setCurrentCell(row, 0);
+            return;
+        }
+    }
+}
+
+static bool validCoordinates(QLineEdit *lng, QLineEdit *lat)
+{
+    bool lngOk = false, latOk = false;
+    const double x = lng->text().toDouble(&lngOk);
+    const double y = lat->text().toDouble(&latOk);
+    return lngOk && latOk && qIsFinite(x) && qIsFinite(y)
+        && x >= -180.0 && x <= 180.0 && y >= -90.0 && y <= 90.0;
 }
 
 static QLabel *kpi(const QString &text)
@@ -271,7 +304,7 @@ MainWindow::MainWindow(Dispatch *dispatch, QWidget *parent)
     auto *ol = new QVBoxLayout(od);
     auto *obar = new QHBoxLayout;
     orderKw_ = new QLineEdit;
-    orderKw_->setPlaceholderText(u8("订单号 / 手机号"));
+    orderKw_->setPlaceholderText(u8("订单号 / 手机号 / 电桩编号"));
     auto *os = new QPushButton(u8("查询订单"));
     auto *fstop = new QPushButton(u8("强制结束充电"));
     auto *fsettle = new QPushButton(u8("代结算"));
@@ -439,6 +472,11 @@ MainWindow::MainWindow(Dispatch *dispatch, QWidget *parent)
 /** 从 Dispatch 拉 KPI、表格、图表；不经 8888。 */
 void MainWindow::refresh()
 {
+    const QVector<QPair<QTableWidget *, QVariant>> selected = {
+        {pileTable_, selectedEntity(pileTable_)}, {stationTable_, selectedEntity(stationTable_)},
+        {userTable_, selectedEntity(userTable_)}, {orderTable_, selectedEntity(orderTable_)},
+        {planTable_, selectedEntity(planTable_)}
+    };
     const QJsonObject s = dispatch_->salesSummary();
     kToday_->setText(u8("今日营收\n¥ ") + QString::number(s.value("today").toDouble(), 'f', 2));
     kMonth_->setText(u8("本月营收\n¥ ") + QString::number(s.value("month").toDouble(), 'f', 2));
@@ -491,10 +529,13 @@ void MainWindow::refresh()
     for (int i = 0; i < stations.size(); ++i) {
         const auto &r = stations[i];
         stationTable_->setItem(i, 0, new QTableWidgetItem(r.value("id").toString()));
+        stationTable_->item(i, 0)->setData(Qt::UserRole, r.value("id"));
         stationTable_->setItem(i, 1, new QTableWidgetItem(r.value("name").toString()));
         stationTable_->setItem(i, 2, new QTableWidgetItem(r.value("address").toString()));
         stationTable_->setItem(i, 3, new QTableWidgetItem(
             QString("%1,%2").arg(r.value("lng").toDouble(), 0, 'f', 4).arg(r.value("lat").toDouble(), 0, 'f', 4)));
+        stationTable_->item(i, 3)->setData(Qt::UserRole, r.value("lng"));
+        stationTable_->item(i, 3)->setData(Qt::UserRole + 1, r.value("lat"));
         stationTable_->setItem(i, 4, new QTableWidgetItem(QString::number(r.value("price_per_kwh").toDouble(), 'f', 2)));
         stationTable_->setItem(i, 5, new QTableWidgetItem(r.value("totalPiles").toString()));
         stationTable_->setItem(i, 6, new QTableWidgetItem(QString::number(r.value("onlineRate").toDouble(), 'f', 1) + "%"));
@@ -518,6 +559,7 @@ void MainWindow::refresh()
     for (int i = 0; i < users.size(); ++i) {
         const auto &u = users[i];
         userTable_->setItem(i, 0, new QTableWidgetItem(u.value("id").toString()));
+        userTable_->item(i, 0)->setData(Qt::UserRole, u.value("id"));
         userTable_->setItem(i, 1, new QTableWidgetItem(u.value("phone").toString()));
         userTable_->setItem(i, 2, new QTableWidgetItem(u.value("nickname").toString()));
         userTable_->setItem(i, 3, new QTableWidgetItem(u.value("has_avatar").toInt() ? u8("已上传") : u8("默认")));
@@ -666,6 +708,8 @@ void MainWindow::refresh()
         auditTable_->setItem(i, 3, new QTableWidgetItem(a.value("target").toString()));
         auditTable_->setItem(i, 4, new QTableWidgetItem(a.value("result").toString()));
     }
+    for (const auto &entry : selected)
+        restoreEntity(entry.first, entry.second);
 }
 
 /** 选中行 → Dispatch::rebootPile。 */
@@ -761,23 +805,19 @@ void MainWindow::addStation()
     dlg.body()->addStretch(1);
     dlg.addCancel();
     dlg.addOk(u8("创建电站"));
-    if (dlg.exec() != QDialog::Accepted)
-        return;
-    bool lngOk = false;
-    bool latOk = false;
-    const double lngValue = lng->text().toDouble(&lngOk);
-    const double latValue = lat->text().toDouble(&latOk);
-    if (name->text().trimmed().isEmpty() || addr->text().trimmed().isEmpty()
-        || !lngOk || !latOk || lngValue < -180.0 || lngValue > 180.0
-        || latValue < -90.0 || latValue > 90.0) {
-        uiWarn(this, u8("创建失败"), u8("站名和地址不能为空，经纬度必须在有效范围内"));
-        return;
+    while (true) {
+        if (dlg.exec() != QDialog::Accepted)
+            return;
+        if (!name->text().trimmed().isEmpty() && !addr->text().trimmed().isEmpty()
+            && validCoordinates(lng, lat))
+            break;
+        uiWarn(this, u8("创建失败"), u8("站名和地址不能为空，经纬度必须在有效范围内，请修改后重试"));
     }
     QVariantMap data;
     data["name"] = name->text();
     data["address"] = addr->text();
-    data["lng"] = lngValue;
-    data["lat"] = latValue;
+    data["lng"] = lng->text().toDouble();
+    data["lat"] = lat->text().toDouble();
     data["pileCount"] = n->value();
     data["pricePerKwh"] = price->value();
     const int stationId = dispatch_->addStation(data);
@@ -797,13 +837,14 @@ void MainWindow::editStation()
         uiInfo(this, u8("提示"), u8("请先选中电站"));
         return;
     }
-    UiSheet dlg(this, u8("修改电站"), u8("保存后立即生效，不影响正在充电的订单金额口径。"));
+    const int stationId = stationTable_->item(row, 0)->data(Qt::UserRole).toInt();
+    UiSheet dlg(this, u8("修改电站"), u8("修改站点基本信息和基准电价；已有分时电价请通过“启用分时电价”更新。"));
     dlg.polish(600, 600);
     auto *name = new QLineEdit(stationTable_->item(row, 1)->text());
     auto *addr = new QLineEdit(stationTable_->item(row, 2)->text());
-    const QStringList ll = stationTable_->item(row, 3)->text().split(QLatin1Char(','));
-    auto *lng = new QLineEdit(ll.value(0));
-    auto *lat = new QLineEdit(ll.value(1));
+    const auto *coordinates = stationTable_->item(row, 3);
+    auto *lng = new QLineEdit(QString::number(coordinates->data(Qt::UserRole).toDouble(), 'g', 17));
+    auto *lat = new QLineEdit(QString::number(coordinates->data(Qt::UserRole + 1).toDouble(), 'g', 17));
     auto *price = new QDoubleSpinBox;
     price->setRange(0.10, 20.00);
     price->setDecimals(2);
@@ -828,8 +869,14 @@ void MainWindow::editStation()
     dlg.body()->addStretch(1);
     dlg.addCancel();
     dlg.addOk(u8("保存修改"));
-    if (dlg.exec() != QDialog::Accepted)
-        return;
+    while (true) {
+        if (dlg.exec() != QDialog::Accepted)
+            return;
+        if (!name->text().trimmed().isEmpty() && !addr->text().trimmed().isEmpty()
+            && validCoordinates(lng, lat))
+            break;
+        uiWarn(this, u8("保存失败"), u8("站名和地址不能为空，经纬度必须在有效范围内，请修改后重试"));
+    }
     QVariantMap data;
     data["name"] = name->text();
     data["address"] = addr->text();
@@ -837,7 +884,7 @@ void MainWindow::editStation()
     data["lat"] = lat->text().toDouble();
     data["pricePerKwh"] = price->value();
     uiInfo(this, u8("修改电站"),
-           dispatch_->updateStation(stationTable_->item(row, 0)->text().toInt(), data));
+           dispatch_->updateStation(stationId, data));
     refresh();
 }
 

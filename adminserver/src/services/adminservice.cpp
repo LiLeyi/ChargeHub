@@ -15,6 +15,19 @@ static qint64 fenOf(double yuan) { return qRound(yuan * 100.0); }
 static double money(double value) { return fenOf(value) / 100.0; }
 static QString nowStr() { return QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"); }
 
+static bool validStationValues(const QVariantMap &data)
+{
+    bool lngOk = false, latOk = false, priceOk = false;
+    const double lng = data.value("lng").toDouble(&lngOk);
+    const double lat = data.value("lat").toDouble(&latOk);
+    const double price = data.value("pricePerKwh", 1.3).toDouble(&priceOk);
+    return !data.value("name").toString().trimmed().isEmpty()
+        && !data.value("address").toString().trimmed().isEmpty()
+        && lngOk && latOk && priceOk && qIsFinite(lng) && qIsFinite(lat) && qIsFinite(price)
+        && lng >= -180.0 && lng <= 180.0 && lat >= -90.0 && lat <= 90.0
+        && price >= 0.10 && price <= 20.0;
+}
+
 AdminService::AdminService(Database *db, SessionService *sessions, ChargeService *charges)
     : db_(db), sessions_(sessions), charges_(charges) {}
 
@@ -36,8 +49,9 @@ QJsonObject AdminService::adminRegister(const QString &user, const QString &pwd)
     if (!db_->one("SELECT id FROM admin WHERE username=?", {user}).isEmpty())
         return QJsonObject{{"ok", false}, {"message", QString::fromUtf8("该账号已注册")}};
     const QByteArray hash = QCryptographicHash::hash(pwd.toUtf8(), QCryptographicHash::Sha256).toHex();
-    db_->execute("INSERT INTO admin(username,password_hash,created_at) VALUES(?,?,?)",
-                 {user, QString::fromLatin1(hash), nowStr()});
+    if (db_->execute("INSERT INTO admin(username,password_hash,created_at) VALUES(?,?,?)",
+                     {user, QString::fromLatin1(hash), nowStr()}) <= 0)
+        return QJsonObject{{"ok", false}, {"message", QString::fromUtf8("注册失败，账号未写入，请重试")}};
     return QJsonObject{{"ok", true}, {"username", user}, {"registered", true}};
 }
 
@@ -82,13 +96,18 @@ QString AdminService::rebootPile(int pileId)
     if (pile.value("status").toString() == QString::fromUtf8("在用"))
         return QString::fromUtf8("充电中的电桩不可重启");
     QString msg = QString::fromUtf8("重启指令已发送");
-    if (pile.value("status").toString() == QString::fromUtf8("故障")) {
-        db_->execute("UPDATE pile SET status=? WHERE id=?", {QString::fromUtf8("闲置"), pileId});
+    const bool faulty = pile.value("status").toString() == QString::fromUtf8("故障");
+    if (faulty)
         msg = QString::fromUtf8("重启指令已发送，故障已恢复为闲置");
-    }
-    db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
-                 {"admin", QString::fromUtf8("远程重启"), pile.value("pile_no"), QString::fromUtf8("成功"), nowStr()});
-    return msg;
+    const bool ok = db_->transaction([&] {
+        if (faulty && db_->execute("UPDATE pile SET status=?, fault_code='', fault_at='' WHERE id=?",
+                                   {QString::fromUtf8("闲置"), pileId}) < 0)
+            return false;
+        return db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
+                            {"admin", QString::fromUtf8("远程重启"), pile.value("pile_no"),
+                             QString::fromUtf8("成功"), nowStr()}) >= 0;
+    });
+    return ok ? msg : QString::fromUtf8("重启失败，设备状态和审计记录未写入");
 }
 
 QString AdminService::freezeUser(int userId, bool freeze)
@@ -138,15 +157,14 @@ int AdminService::addStation(const QVariantMap &data)
     const double lng = data.value("lng").toDouble();
     const double lat = data.value("lat").toDouble();
     const double price = data.value("pricePerKwh", 1.3).toDouble();
-    if (name.isEmpty() || address.isEmpty() || lng < -180.0 || lng > 180.0
-        || lat < -90.0 || lat > 90.0 || price <= 0)
+    if (!validStationValues(data))
         return 0;
     int sid = 0;
     const int n = qBound(1, data.value("pileCount", 4).toInt(), 20);
     const bool ok = db_->transaction([&] {
         sid = db_->execute(
             "INSERT INTO station(name,address,lng,lat,price_per_kwh) VALUES(?,?,?,?,?)",
-            {name, address, lng, lat, price});
+            {name, address, lng, lat, money(price)});
         if (sid <= 0)
             return false;
         for (int i = 1; i <= n; ++i) {
@@ -158,11 +176,32 @@ int AdminService::addStation(const QVariantMap &data)
                 <= 0)
                 return false;
         }
-        return true;
+        if (!replaceTariff(sid, money(price)))
+            return false;
+        return db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
+                            {"admin", QString::fromUtf8("启用分时电价"), name,
+                             QString::fromUtf8("谷/平/峰"), nowStr()}) >= 0;
     });
-    if (ok && sid > 0)
-        applyDefaultTariff(sid);
     return ok ? sid : 0;
+}
+
+bool AdminService::replaceTariff(int stationId, double base, double peakFactor)
+{
+    if (!qIsFinite(base) || base < 0.10 || base > 20.0)
+        return false;
+    if (db_->execute("DELETE FROM tariff_rule WHERE station_id=?", {stationId}) < 0)
+        return false;
+    const double valley = money(base * 0.85);
+    const double peak = money(base * peakFactor);
+    const struct { int a, b; double p; const char *lab; } rows[] = {
+        {0, 7, valley, "谷"}, {7, 17, base, "平"}, {17, 22, peak, "峰"}, {22, 24, valley, "谷"},
+    };
+    for (const auto &r : rows) {
+        if (db_->execute("INSERT INTO tariff_rule(station_id,start_hour,end_hour,price_per_kwh,label) VALUES(?,?,?,?,?)",
+                         {stationId, r.a, r.b, r.p, QString::fromUtf8(r.lab)}) <= 0)
+            return false;
+    }
+    return true;
 }
 
 QString AdminService::applyDefaultTariff(int stationId)
@@ -170,26 +209,15 @@ QString AdminService::applyDefaultTariff(int stationId)
     auto st = db_->one("SELECT * FROM station WHERE id=?", {stationId});
     if (st.isEmpty())
         return QString::fromUtf8("电站不存在");
-    const double base = st.value("price_per_kwh").toDouble();
-    const double valley = money(base * 0.85);
-    const double peak = money(base * 1.25);
-    db_->transaction([&] {
-        if (db_->execute("DELETE FROM tariff_rule WHERE station_id=?", {stationId}) < 0)
+    const bool ok = db_->transaction([&] {
+        if (!replaceTariff(stationId, st.value("price_per_kwh").toDouble()))
             return false;
-        const struct { int a, b; double p; const char *lab; } rows[] = {
-            {0, 7, valley, "谷"}, {7, 17, base, "平"}, {17, 22, peak, "峰"}, {22, 24, valley, "谷"},
-        };
-        for (const auto &r : rows) {
-            if (db_->execute("INSERT INTO tariff_rule(station_id,start_hour,end_hour,price_per_kwh,label) VALUES(?,?,?,?,?)",
-                             {stationId, r.a, r.b, r.p, QString::fromUtf8(r.lab)})
-                <= 0)
-                return false;
-        }
-        return true;
+        return db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
+                            {"admin", QString::fromUtf8("启用分时电价"), st.value("name"),
+                             QString::fromUtf8("谷/平/峰"), nowStr()}) >= 0;
     });
-    db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
-                 {"admin", QString::fromUtf8("启用分时电价"), st.value("name"),
-                  QString::fromUtf8("谷/平/峰"), nowStr()});
+    if (!ok)
+        return QString::fromUtf8("启用失败，原有电价保持不变");
     return QString::fromUtf8("已按基准电价启用谷 0.85 / 平 1.0 / 峰 1.25");
 }
 
@@ -198,17 +226,25 @@ QString AdminService::adoptDispatchPlan(int planId)
     auto plan = db_->one("SELECT * FROM dispatch_plan WHERE id=?", {planId});
     if (plan.isEmpty())
         return QString::fromUtf8("没有这条调度建议");
-    auto st = db_->one("SELECT * FROM station WHERE name=?", {plan.value("station")});
-    if (st.isEmpty())
+    if (plan.value("adopted").toInt())
+        return QString::fromUtf8("该建议已采纳，无需重复操作");
+    const auto stations = db_->query("SELECT * FROM station WHERE name=?", {plan.value("station")});
+    if (stations.isEmpty())
         return QString::fromUtf8("对不上电站名，请先刷新分析");
-    applyDefaultTariff(st.value("id").toInt());
-    const double peak = money(st.value("price_per_kwh").toDouble() * 1.35);
-    db_->execute("UPDATE tariff_rule SET price_per_kwh=? WHERE station_id=? AND label=?",
-                 {peak, st.value("id"), QString::fromUtf8("峰")});
-    db_->execute("UPDATE dispatch_plan SET adopted=1, adopted_at=? WHERE id=?", {nowStr(), planId});
-    db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
-                 {"admin", QString::fromUtf8("采纳调度"), plan.value("station"),
-                  QString::fromUtf8("峰段上浮"), nowStr()});
+    if (stations.size() != 1)
+        return QString::fromUtf8("存在同名电站，无法确定改价对象，请先区分站名并刷新分析");
+    const auto st = stations.first();
+    const bool ok = db_->transaction([&] {
+        if (!replaceTariff(st.value("id").toInt(), st.value("price_per_kwh").toDouble(), 1.35))
+            return false;
+        if (db_->execute("UPDATE dispatch_plan SET adopted=1, adopted_at=? WHERE id=?", {nowStr(), planId}) < 0)
+            return false;
+        return db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
+                            {"admin", QString::fromUtf8("采纳调度"), plan.value("station"),
+                             QString::fromUtf8("峰段上浮"), nowStr()}) >= 0;
+    });
+    if (!ok)
+        return QString::fromUtf8("采纳失败，电价和建议状态保持不变");
     return QString::fromUtf8("已采纳：该站峰时段电价上浮，引导错峰");
 }
 
@@ -220,10 +256,15 @@ QString AdminService::markPileFault(int pileId)
     if (pile.value("status").toString() == QString::fromUtf8("在用"))
         return QString::fromUtf8("充电中的电桩请先强制结束订单，再标故障");
     const QString t = nowStr();
-    db_->execute("UPDATE pile SET status=?, fault_code=?, fault_at=? WHERE id=?",
-                 {QString::fromUtf8("故障"), QString::fromUtf8("ADMIN"), t, pileId});
-    db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
-                 {"admin", QString::fromUtf8("标记故障"), pile.value("pile_no"), QString::fromUtf8("成功"), t});
+    const bool ok = db_->transaction([&] {
+        if (db_->execute("UPDATE pile SET status=?, fault_code=?, fault_at=? WHERE id=?",
+                         {QString::fromUtf8("故障"), QString::fromUtf8("ADMIN"), t, pileId}) < 0)
+            return false;
+        return db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
+                            {"admin", QString::fromUtf8("标记故障"), pile.value("pile_no"), QString::fromUtf8("成功"), t}) >= 0;
+    });
+    if (!ok)
+        return QString::fromUtf8("标记失败，设备状态和审计记录未写入");
     return QString::fromUtf8("已标记为故障，用户端不可再开充");
 }
 
@@ -239,14 +280,21 @@ QString AdminService::updateStation(int stationId, const QVariantMap &data)
         return QString::fromUtf8("电站不存在");
     const QString name = data.value("name").toString().trimmed();
     const QString address = data.value("address").toString().trimmed();
-    const double price = data.value("pricePerKwh").toDouble();
-    if (name.isEmpty() || address.isEmpty() || price <= 0)
-        return QString::fromUtf8("站名、地址不能空，电价须大于 0");
-    db_->execute("UPDATE station SET name=?, address=?, lng=?, lat=?, price_per_kwh=? WHERE id=?",
-                 {name, address, data.value("lng", st.value("lng")), data.value("lat", st.value("lat")),
-                  money(price), stationId});
-    db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
-                 {"admin", QString::fromUtf8("修改电站"), name, QString::fromUtf8("成功"), nowStr()});
+    QVariantMap values = data;
+    values.insert("lng", data.value("lng", st.value("lng")));
+    values.insert("lat", data.value("lat", st.value("lat")));
+    if (!validStationValues(values))
+        return QString::fromUtf8("站名、地址不能空，经纬度须有效，电价须在 0.10～20.00 元之间");
+    const bool ok = db_->transaction([&] {
+        if (db_->execute("UPDATE station SET name=?, address=?, lng=?, lat=?, price_per_kwh=? WHERE id=?",
+                         {name, address, values.value("lng").toDouble(), values.value("lat").toDouble(),
+                          money(values.value("pricePerKwh", 1.3).toDouble()), stationId}) < 0)
+            return false;
+        return db_->execute("INSERT INTO audit_log(actor,action,target,result,created_at) VALUES(?,?,?,?,?)",
+                            {"admin", QString::fromUtf8("修改电站"), name, QString::fromUtf8("成功"), nowStr()}) >= 0;
+    });
+    if (!ok)
+        return QString::fromUtf8("保存失败，电站信息保持不变");
     return QString::fromUtf8("电站已更新");
 }
 
