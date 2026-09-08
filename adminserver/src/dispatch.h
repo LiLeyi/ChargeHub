@@ -5,13 +5,13 @@
  * @file dispatch.h
  * @brief 业务门面：组合请求路由、会话服务和现有领域业务。
  *
- * 【职责】所有会改余额 / 订单 / 桩状态的规则都在这里。界面和 Socket 只把参数传进来。
+ * 【职责】只装配领域服务、注册用户协议路由，并为现有管理界面提供兼容代理。
  * 【原理】
  *   - 用户端：TcpServer 拆包后调用 handle()，由 RequestDispatcher 路由和鉴权。
  *   - 管理端：MainWindow 同进程直接调 listPiles / forceSettleOrder，不走 8888。
- *   - 写库一律 Database::transaction，失败整笔回滚。
- *   - 金额内部用「分」，回包仍是元，旧客户端不用改。
- * 【协作】依赖 Database、SessionService、RequestDispatcher；被 TcpServer、MainWindow 调用。
+ *   - 业务校验和 SQL 已下沉到 services/；本类不直接访问数据库。
+ *   - 对外方法签名保持不变，因此 TcpServer/MainWindow 无需感知拆分。
+ * 【协作】组合 services/ 与 transport/；被 TcpServer、MainWindow 调用。
  * 【详见】docs/模块与协作说明.md
  */
 
@@ -24,9 +24,14 @@
 
 class Database;
 class ChargeService;
+class AdminService;
+class AnalyticsService;
 class RequestDispatcher;
 class ReservationService;
+class ReviewService;
 class SessionService;
+class StationService;
+class UserService;
 
 class Dispatch {
 public:
@@ -182,55 +187,18 @@ public:
     QJsonObject chargePushFor(int userId) const;
 
 private:
-    Database *db_;
     std::unique_ptr<SessionService> sessions_;
     std::unique_ptr<ReservationService> reservations_;
+    std::unique_ptr<StationService> stations_;
     std::unique_ptr<ChargeService> charges_;
+    std::unique_ptr<AdminService> admin_;
+    std::unique_ptr<AnalyticsService> analytics_;
+    std::unique_ptr<UserService> users_;
+    std::unique_ptr<ReviewService> reviews_;
     std::unique_ptr<RequestDispatcher> requestDispatcher_;
 
     /** 注册用户端协议路由，业务实现仍由各领域函数承接。 */
     void registerRoutes();
-
-    /**
-     * 模拟充值。单笔 0~10000 元。事务：加 user.balance + 插 recharge_log。
-     * 被 handle(RECHARGE) 调用。
-     */
-    QJsonObject recharge(const QVariantMap &user, const QJsonObject &data);
-
-    /**
-     * 改昵称和/或头像。头像压成小 JPEG 写入 user_avatar，avatar_path='db'。
-     * 被 handle(UPDATE_PROFILE) 调用。
-     */
-    QJsonObject updateProfile(const QVariantMap &user, const QJsonObject &data);
-
-    /**
-     * 按地址关键字或半径找附近电站，可带用户定位。
-     * 被 handle(QUERY_STATIONS) 调用。只读 station。
-     */
-    QJsonObject queryStations(const QVariantMap &user, const QJsonObject &data);
-
-    /**
-     * 注销：status=注销，dropUser，历史订单保留。同一手机号不能再注册。
-     * 被 handle(CLOSE_ACCOUNT) 调用。
-     */
-    QJsonObject closeAccount(const QVariantMap &user);
-
-    /**
-     * 列出某站的桩，并标出是否被预约、当前用户能不能用。
-     * 先 expireReservations。被 handle(QUERY_PILES) 调用。
-     */
-    QJsonObject queryPiles(const QVariantMap &user, const QJsonObject &data);
-
-    /** 当前用户充值流水。被 handle(LIST_RECHARGE) 调用。 */
-    QJsonObject listRecharge(const QVariantMap &user);
-    /**
-     * 提交评价：必须有文字。写 station_review，并浅层关键词情感写入 review_doc。
-     * 被 handle(REVIEW_STATION) 调用。
-     */
-    QJsonObject reviewStation(const QVariantMap &user, const QJsonObject &data);
-
-    /** 某桩的评价列表与均分、情感摘要。被 handle(LIST_PILE_REVIEWS) 调用。 */
-    QJsonObject listPileReviews(const QVariantMap &user, const QJsonObject &data);
 
 };
 

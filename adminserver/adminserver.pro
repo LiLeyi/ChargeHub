@@ -12,6 +12,11 @@ SOURCES += \
     src/services/sessionservice.cpp \
     src/services/chargeservice.cpp \
     src/services/reservationservice.cpp \
+    src/services/stationservice.cpp \
+    src/services/userservice.cpp \
+    src/services/reviewservice.cpp \
+    src/services/adminservice.cpp \
+    src/services/analyticsservice.cpp \
     src/transport/requestdispatcher.cpp \
     src/dispatch.cpp \
     src/tcpserver.cpp \
@@ -24,6 +29,11 @@ HEADERS += \
     src/services/sessionservice.h \
     src/services/chargeservice.h \
     src/services/reservationservice.h \
+    src/services/stationservice.h \
+    src/services/userservice.h \
+    src/services/reviewservice.h \
+    src/services/adminservice.h \
+    src/services/analyticsservice.h \
     src/transport/serviceresult.h \
     src/transport/requestdispatcher.h \
     src/dispatch.h \
