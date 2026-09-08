@@ -1246,7 +1246,6 @@ void UserWindow::renderRecharge(const QJsonArray &arr)
 /** 刷新充电页：时长、电量、费用、停充/结算按钮。 */
 void UserWindow::showCharge(const QJsonObject &order)
 {
-    currentOrder_ = order;
     const QString st = order.value("status").toString();
     if (chargePage_)
         chargePage_->setOrder(order);
@@ -1260,7 +1259,6 @@ void UserWindow::showCharge(const QJsonObject &order)
     }
 }
 
-/** 先 CHARGE_STATUS，有未完成单则提示结算，否则再开充。 */
 /** 先 CHARGE_STATUS，没有未完成单再 START_CHARGE。 */
 void UserWindow::tryStart(int pileId)
 {
@@ -1635,7 +1633,6 @@ void UserWindow::onResp(QJsonObject obj)
         if (!order.isEmpty() && order.value("id").toInt() > 0) {
             showCharge(order);
         } else if (pages_->currentIndex() == 2) {
-            currentOrder_ = {};
             if (chargePage_)
                 chargePage_->clearOrder();
         }
@@ -1650,7 +1647,6 @@ void UserWindow::onResp(QJsonObject obj)
                    .arg(o.value("energyKwh").toDouble(), 0, 'f', 3)
                    .arg(o.value("amount").toDouble(), 0, 'f', 2)
                    .arg(controller_.user().value("balance").toDouble(), 0, 'f', 2));
-        currentOrder_ = {};
         switchTab(3);
     } else if (type == "LIST_ORDERS") {
         renderOrders(data.value("orders").toArray());

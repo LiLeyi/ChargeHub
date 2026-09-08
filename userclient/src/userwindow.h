@@ -136,7 +136,6 @@ private:
     UserController controller_;
     QNetworkAccessManager *mapNetwork_ = nullptr; ///< 仅腾讯地图 HTTP
     QJsonObject currentStation_;                  ///< 点进去的那座站
-    QJsonObject currentOrder_;                    ///< 充电页正在看的订单
     QJsonObject currentPile_;                     ///< 评价页正在看的桩
     int reviewStars_ = 5;
 
