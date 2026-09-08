@@ -121,6 +121,10 @@ private:
     void closeMyAccount();
     /** 按登录页填的 host:port 让控制器重新连接。 */
     void reconnect();
+    /** 通过IP获取用户位置 */
+    void fetchLocationByIP();
+    /** 计算两点间距离（公里） */
+    static double haversine(double lat1, double lng1, double lat2, double lng2);
 
     /** 登录页：服务器地址、手机、密码、注册确认。 */
     QWidget *buildLogin();
@@ -167,6 +171,7 @@ private:
     double locLng_ = 116.3473;
     bool useGps_ = false;
     bool pendingConsent_ = false;
+    bool hasLocationFromIP_ = false;
     QString gpsPlace_;
     QComboBox *pileType_ = nullptr;
     QVBoxLayout *stationBox_ = nullptr;
