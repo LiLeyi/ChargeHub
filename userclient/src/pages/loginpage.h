@@ -21,16 +21,20 @@ signals:
     void connectRequested();
     void authenticationRequested(QString type, QString phone, QString password);
 
+private slots:
+    /** 当手机号文本改变时，动态显示/隐藏确认密码框 */
+    void onPhoneTextChanged(const QString &text);
+
 private:
     void submitLogin();
     void submitRegistration();
     bool validateCredentials(QString *phone, QString *password);
 
-    QLineEdit *hostEdit_ = nullptr;
     QLineEdit *phoneEdit_ = nullptr;
     QLineEdit *passwordEdit_ = nullptr;
     QLineEdit *confirmEdit_ = nullptr;
     QLabel *statusLabel_ = nullptr;
+    bool isRegisterMode_ = false;
 };
 
 #endif
