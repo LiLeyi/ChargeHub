@@ -9,11 +9,21 @@ INCLUDEPATH += $$PWD/src $$PWD/../common
 SOURCES += \
     src/main.cpp \
     src/client.cpp \
+    src/usercontroller.cpp \
+    src/pages/loginpage.cpp \
+    src/pages/chargepage.cpp \
+    src/pages/orderspage.cpp \
+    src/pages/reservationspage.cpp \
     src/userwindow.cpp \
     ../common/protocol.cpp
 
 HEADERS += \
     src/client.h \
+    src/usercontroller.h \
+    src/pages/loginpage.h \
+    src/pages/chargepage.h \
+    src/pages/orderspage.h \
+    src/pages/reservationspage.h \
     src/userwindow.h \
     ../common/protocol.h \
     ../common/appstyle.h \

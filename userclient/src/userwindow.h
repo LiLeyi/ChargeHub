@@ -5,15 +5,15 @@
  * @file userwindow.h
  * @brief 用户端全部页面：登录、找桩、预约、充电、订单、评价、个人中心。
  *
- * 【职责】画界面、做格式校验、把按钮变成 Socket 请求；不写 SQLite。
- * 【原理】root_ 两页（登录 / 主壳）；pages_ 里各业务页。所有写操作 → Client::request。
+ * 【职责】画界面、做格式校验、把页面操作交给 UserController；不写 SQLite。
+ * 【原理】root_ 两页（登录 / 主壳）；pages_ 里各业务页。网络状态由 UserController 管理。
  *         回包统一 onResp：失败弹 UiSheet；PUSH_CHARGE 只刷新充电页。
- * 【协作】依赖 Client、uidialog。地图用 HTTP 拉腾讯静态图，不经过管理端业务。
+ * 【协作】依赖 UserController、uidialog。地图用 HTTP 拉腾讯静态图，不经过管理端业务。
  * 【联调】服务器填管理端底栏 IP:8888；本机自测 127.0.0.1:8888。
  * 【详见】docs/模块与协作说明.md
  */
 
-#include "client.h"
+#include "usercontroller.h"
 
 #include <QComboBox>
 #include <QJsonArray>
@@ -28,11 +28,14 @@
 #include <QScrollArea>
 #include <QStackedWidget>
 #include <QStatusBar>
-#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
 class QNetworkAccessManager;
+class ChargePage;
+class LoginPage;
+class OrdersPage;
+class ReservationsPage;
 
 class UserWindow : public QMainWindow {
     Q_OBJECT
@@ -44,10 +47,6 @@ public:
     explicit UserWindow(QWidget *parent = nullptr);
 
 private slots:
-    /** 校验手机号/密码长度，记下 pendingAuth_=LOGIN，已连接则发出，否则 reconnect。 */
-    void doLogin();
-    /** 还要两次密码一致。pendingAuth_=REGISTER，其余同 doLogin。 */
-    void doRegister();
     /** 按地址关键字和半径发 QUERY_STATIONS，data 带当前 coord()。 */
     void queryStations();
     /**
@@ -55,13 +54,11 @@ private slots:
      * code≠0 弹窗（登录失败才退回登录页）；成功按 type 分支刷新对应页。
      */
     void onResp(QJsonObject obj);
-    /** 充电中定时发 CHARGE_STATUS，作为 PUSH_CHARGE 的补充（旧客户端也靠它）。 */
-    void pollCharge();
 
 private:
     /** 当前定位 {lat,lng}，给找站和导航。默认北京演示点。 */
     QJsonObject coord() const;
-    /** 把回包里的 user 存进 user_，刷新顶栏余额/头像。 */
+    /** 用控制器中的用户快照刷新顶栏余额和头像。 */
     void applyUser(const QJsonObject &u);
     /** 登录成功：root_ 切到主壳，拉一次电站列表。 */
     void showShell();
@@ -75,8 +72,6 @@ private:
     void renderOrders(const QJsonArray &arr);
     /** 画充值流水。 */
     void renderRecharge(const QJsonArray &arr);
-    /** 画预约列表；可取消未过期的。 */
-    void renderReservations(const QJsonArray &arr);
     /** 画某桩评价页：均分、星、已有评论、情感摘要。 */
     void renderPileReview(const QJsonObject &data);
     /** 刷新充电页：时长、电量、费用、分时标签；切换停充/结算按钮。 */
@@ -114,14 +109,8 @@ private:
     void showAvatar(const QJsonObject &u);
     /** 二次确认后发 CLOSE_ACCOUNT；成功退回登录页。 */
     void closeMyAccount();
-    /** 按登录页填的 host:port 重新 Client::connectTo。 */
+    /** 按登录页填的 host:port 让控制器重新连接。 */
     void reconnect();
-    /** 连上后把挂起的 LOGIN/REGISTER 真正 request 出去。 */
-    void sendPendingAuth();
-    /** 登录页主机框；空则 127.0.0.1。 */
-    QString serverHost() const;
-    /** 登录页端口；非法则 8888。 */
-    quint16 serverPort() const;
 
     /** 登录页：服务器地址、手机、密码、注册确认。 */
     QWidget *buildLogin();
@@ -144,28 +133,16 @@ private:
     /** 清空布局里的控件，重新 render 前用。 */
     static void clearBox(QLayout *lay);
 
-    Client client_;
+    UserController controller_;
     QNetworkAccessManager *mapNetwork_ = nullptr; ///< 仅腾讯地图 HTTP
-    QTimer poll_;                                 ///< 充电中轮询 CHARGE_STATUS
-    QString token_;                               ///< 登录后通行证，之后每请求都带
-    QJsonObject user_;                            ///< 当前用户公开字段
     QJsonObject currentStation_;                  ///< 点进去的那座站
     QJsonObject currentOrder_;                    ///< 充电页正在看的订单
     QJsonObject currentPile_;                     ///< 评价页正在看的桩
-    int pendingPile_ = 0;                         ///< tryStart 等待 CHARGE_STATUS 时记下的桩
     int reviewStars_ = 5;
-    bool wantStart_ = false;                      ///< CHARGE_STATUS 回来后是否接着开充
-    QString pendingAuth_;                         ///< "LOGIN" / "REGISTER" / 空
-    QString pendingPhone_;
-    QString pendingPwd_;
 
     QStackedWidget *root_ = nullptr;
     QStackedWidget *pages_ = nullptr;
-    QLineEdit *hostEdit_ = nullptr;
-    QLabel *loginHint_ = nullptr;
-    QLineEdit *phone_ = nullptr;
-    QLineEdit *pwd_ = nullptr;
-    QLineEdit *pwd2_ = nullptr;
+    LoginPage *loginPage_ = nullptr;
     QLabel *headBal_ = nullptr;
     QLabel *pageTitle_ = nullptr;
     QLabel *pageSub_ = nullptr;
@@ -175,22 +152,15 @@ private:
     double locLat_ = 39.9644;
     double locLng_ = 116.3473;
     QComboBox *pileType_ = nullptr;
-    QComboBox *orderFilter_ = nullptr;
     QVBoxLayout *stationBox_ = nullptr;
     QLabel *pileTitle_ = nullptr;
     QLabel *pileMeta_ = nullptr;
     QVBoxLayout *pileBox_ = nullptr;
     QVBoxLayout *rechargeBox_ = nullptr;
-    QVBoxLayout *reservationBox_ = nullptr;
     QJsonObject lastPiles_;
-    QJsonArray lastOrders_;
-    QJsonArray lastReservations_;
-    QLabel *chStatus_ = nullptr;
-    QLabel *chTime_ = nullptr;
-    QLabel *chInfo_ = nullptr;
-    QPushButton *stopBtn_ = nullptr;
-    QPushButton *settleBtn_ = nullptr;
-    QVBoxLayout *orderBox_ = nullptr;
+    ChargePage *chargePage_ = nullptr;
+    OrdersPage *ordersPage_ = nullptr;
+    ReservationsPage *reservationsPage_ = nullptr;
     QLabel *avatar_ = nullptr;
     QLabel *meName_ = nullptr;
     QLabel *meBal_ = nullptr;

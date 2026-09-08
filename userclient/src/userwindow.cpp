@@ -3,10 +3,14 @@
  * @brief 用户端页面。按钮 → Client::request；回包 → onResp。不打开数据库。
  *
  * 页：登录 / 找站 / 桩列表 / 充电 / 订单 / 评价 / 预约 / 我的。
- * 充电刷新：PUSH_CHARGE 与 pollCharge 并存，旧字段不删。
+ * 充电刷新：UserController 负责轮询，本窗口负责渲染 PUSH_CHARGE / CHARGE_STATUS。
  */
 #include "userwindow.h"
 #include "uidialog.h"
+#include "pages/chargepage.h"
+#include "pages/loginpage.h"
+#include "pages/orderspage.h"
+#include "pages/reservationspage.h"
 
 #if __has_include("tencentmap_credentials.h")
 #include "tencentmap_credentials.h"
@@ -35,7 +39,6 @@
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QProcess>
-#include <QRegularExpression>
 #include <QSizePolicy>
 #include <QStatusBar>
 #include <QStringList>
@@ -251,17 +254,20 @@ UserWindow::UserWindow(QWidget *parent) : QMainWindow(parent)
     root_->addWidget(buildLogin());
     root_->addWidget(buildShell());
 
-    connect(&client_, &Client::connected, this, [this] {
-        loginHint_->setText(u8("已连接运营平台"));
-        statusBar()->showMessage(u8("已连接  ") + serverHost() + ":" + QString::number(serverPort()));
-        sendPendingAuth();
+    connect(&controller_, &UserController::connected, this, [this] {
+        loginPage_->setStatus(u8("已连接运营平台"));
+        statusBar()->showMessage(u8("已连接  ") + loginPage_->serverHost() + ":"
+                                 + QString::number(loginPage_->serverPort()));
     });
-    connect(&client_, &Client::failed, this, [this](const QString &m) {
-        loginHint_->setText(m);
+    connect(&controller_, &UserController::failed, this, [this](const QString &m) {
+        loginPage_->setStatus(m);
         statusBar()->showMessage(m);
     });
-    connect(&client_, &Client::responded, this, &UserWindow::onResp);
-    connect(&poll_, &QTimer::timeout, this, &UserWindow::pollCharge);
+    connect(&controller_, &UserController::responded, this, &UserWindow::onResp);
+    connect(&controller_, &UserController::chargeStartBlocked, this, [this](const QJsonObject &order) {
+        uiWarn(this, u8("无法开始充电"), u8("您有未完成的充电订单，请先结算"));
+        showCharge(order);
+    });
     statusBar()->showMessage(u8("未连接服务器"));
     reconnect();
 }
@@ -278,107 +284,19 @@ void UserWindow::clearBox(QLayout *lay)
     }
 }
 
-/** 登录页：服务器地址、手机号、密码；不打开数据库。 */
-/** 登录页：服务器地址、手机、密码、注册。 */
 QWidget *UserWindow::buildLogin()
 {
-    auto *w = new QWidget;
-    w->setObjectName("loginRoot");
-    auto *outer = new QHBoxLayout(w);
-    outer->setContentsMargins(0, 0, 0, 0);
-    outer->setSpacing(0);
-
-    auto *brandPane = new QFrame;
-    brandPane->setObjectName("brandPane");
-    brandPane->setMinimumWidth(380);
-    auto *bl = new QVBoxLayout(brandPane);
-    bl->setContentsMargins(48, 56, 48, 48);
-    auto *mark = new QLabel(QStringLiteral("CH"));
-    mark->setObjectName("logoMark");
-    mark->setFixedSize(48, 48);
-    mark->setAlignment(Qt::AlignCenter);
-    auto *brand = new QLabel(u8("ChargeHub"));
-    brand->setObjectName("brandMark");
-    auto *sub = new QLabel(u8("电动汽车充电综合服务平台\n桌面用户端"));
-    sub->setObjectName("brandSub");
-    sub->setWordWrap(true);
-    auto *feat = new QLabel(u8("附近电站  ·  预约占桩\n充电结算  ·  钱包充值"));
-    feat->setObjectName("brandFeat");
-    feat->setWordWrap(true);
-    bl->addStretch();
-    bl->addWidget(mark);
-    bl->addSpacing(16);
-    bl->addWidget(brand);
-    bl->addSpacing(10);
-    bl->addWidget(sub);
-    bl->addSpacing(28);
-    bl->addWidget(feat);
-    bl->addStretch();
-
-    auto *formPane = new QWidget;
-    formPane->setObjectName("formPane");
-    auto *fl = new QVBoxLayout(formPane);
-    fl->setContentsMargins(48, 36, 48, 28);
-    fl->setSpacing(8);
-    auto *title = new QLabel(u8("账号登录"));
-    title->setObjectName("title");
-    auto *desc = new QLabel(u8("使用手机号登录或注册。先连接管理端，再登录。"));
-    desc->setObjectName("muted");
-    desc->setWordWrap(true);
-    phone_ = new QLineEdit("13800138000");
-    phone_->setPlaceholderText(u8("手机号（11 位）"));
-    pwd_ = new QLineEdit("123456");
-    pwd_->setEchoMode(QLineEdit::Password);
-    pwd_->setPlaceholderText(u8("密码（6~20 位）"));
-    pwd2_ = new QLineEdit("123456");
-    pwd2_->setEchoMode(QLineEdit::Password);
-    pwd2_->setPlaceholderText(u8("确认密码（仅注册）"));
-    hostEdit_ = new QLineEdit;
-    QSettings ini(QStringLiteral("ChargeHub"), QStringLiteral("UserClient"));
-    hostEdit_->setText(ini.value("server", QStringLiteral("127.0.0.1:8888")).toString());
-    hostEdit_->setPlaceholderText(u8("服务器地址，例如 192.168.1.8:8888"));
-    auto *conn = new QPushButton(u8("连接"));
-    conn->setObjectName("ghost");
-    conn->setMaximumWidth(100);
-    connect(conn, &QPushButton::clicked, this, &UserWindow::reconnect);
-    auto *hostRow = new QHBoxLayout;
-    hostRow->addWidget(hostEdit_, 1);
-    hostRow->addWidget(conn);
-    auto *pwdRow = new QHBoxLayout;
-    pwdRow->addWidget(pwd_);
-    pwdRow->addWidget(pwd2_);
-    auto *login = new QPushButton(u8("登  录"));
-    login->setObjectName("primary");
-    login->setDefault(true);
-    login->setAutoDefault(true);
-    login->setMinimumHeight(46);
-    auto *reg = new QPushButton(u8("注册新账号"));
-    reg->setObjectName("ghost");
-    connect(login, &QPushButton::clicked, this, &UserWindow::doLogin);
-    connect(reg, &QPushButton::clicked, this, &UserWindow::doRegister);
-    loginHint_ = new QLabel(u8("请先连接服务器"));
-    loginHint_->setObjectName("muted");
-    auto *tips = new QLabel(u8("本机填 127.0.0.1:8888。演示账号 13800138000 / 123456"));
-    tips->setObjectName("muted");
-    tips->setWordWrap(true);
-    fl->addWidget(title);
-    fl->addWidget(desc);
-    fl->addSpacing(8);
-    fl->addWidget(new QLabel(u8("手机号")));
-    fl->addWidget(phone_);
-    fl->addWidget(new QLabel(u8("密码 / 确认密码")));
-    fl->addLayout(pwdRow);
-    fl->addWidget(new QLabel(u8("服务器地址")));
-    fl->addLayout(hostRow);
-    fl->addWidget(loginHint_);
-    fl->addStretch(1);
-    fl->addWidget(login);
-    fl->addWidget(reg);
-    fl->addWidget(tips);
-
-    outer->addWidget(brandPane, 4);
-    outer->addWidget(formPane, 5);
-    return w;
+    loginPage_ = new LoginPage;
+    connect(loginPage_, &LoginPage::connectRequested, this, &UserWindow::reconnect);
+    connect(loginPage_, &LoginPage::authenticationRequested, this,
+            [this](const QString &type, const QString &phone, const QString &password) {
+        controller_.authenticate(type, phone, password);
+        if (!controller_.isConnected()) {
+            loginPage_->setStatus(u8("尚未连接，正在连接服务器…"));
+            reconnect();
+        }
+    });
+    return loginPage_;
 }
 
 /** 主壳：导航 + 顶栏 + pages_。 */
@@ -511,16 +429,16 @@ void UserWindow::switchTab(int i)
     if (i == 0) {
         queryStations();
     } else if (i == 2) {
-        if (!token_.isEmpty())
-            client_.request("CHARGE_STATUS", {}, token_);
+        if (controller_.isAuthenticated())
+            controller_.request("CHARGE_STATUS");
     } else if (i == 3) {
-        if (!token_.isEmpty())
-            client_.request("LIST_ORDERS", {}, token_);
+        if (controller_.isAuthenticated())
+            controller_.request("LIST_ORDERS");
     } else if (i == 4) {
         refreshMe();
     } else if (i == 6) {
-        if (!token_.isEmpty())
-            client_.request("LIST_RESERVATIONS", {}, token_);
+        if (controller_.isAuthenticated())
+            controller_.request("LIST_RESERVATIONS");
     }
 }
 
@@ -747,118 +665,44 @@ QWidget *UserWindow::buildPileReview()
 /** 充电进行页。 */
 QWidget *UserWindow::buildCharge()
 {
-    auto *w = new QWidget;
-    auto *outer = new QHBoxLayout(w);
-    outer->setContentsMargins(24, 24, 24, 24);
-    auto *panel = new QFrame;
-    panel->setObjectName("card");
-    panel->setMaximumWidth(640);
-    auto *lay = new QVBoxLayout(panel);
-    lay->setContentsMargins(28, 24, 28, 24);
-    chStatus_ = new QLabel(u8("暂无进行中的充电"));
-    chStatus_->setObjectName("title");
-    chTime_ = new QLabel(u8("00:00"));
-    chTime_->setObjectName("kpi");
-    chTime_->setAlignment(Qt::AlignCenter);
-    chInfo_ = new QLabel(u8("在「附近电站」选择电站和空闲桩后开始充电。支持预约占桩 15 分钟。"));
-    chInfo_->setObjectName("muted");
-    chInfo_->setWordWrap(true);
-    stopBtn_ = new QPushButton(u8("结束充电"));
-    stopBtn_->setObjectName("danger");
-    settleBtn_ = new QPushButton(u8("立即结算"));
-    auto *home = new QPushButton(u8("去找桩"));
-    home->setObjectName("ghost");
-    connect(stopBtn_, &QPushButton::clicked, this, [this] { client_.request("STOP_CHARGE", {}, token_); });
-    connect(settleBtn_, &QPushButton::clicked, this, [this] { client_.request("SETTLE_ORDER", {}, token_); });
-    connect(home, &QPushButton::clicked, this, [this] { switchTab(0); });
-    stopBtn_->hide();
-    settleBtn_->hide();
-    auto *btns = new QHBoxLayout;
-    btns->addWidget(stopBtn_);
-    btns->addWidget(settleBtn_);
-    btns->addWidget(home);
-    btns->addStretch();
-    lay->addWidget(chStatus_);
-    lay->addSpacing(8);
-    lay->addWidget(chTime_);
-    lay->addSpacing(12);
-    lay->addWidget(chInfo_);
-    lay->addStretch();
-    lay->addLayout(btns);
-    outer->addWidget(panel, 1);
-    outer->addStretch(1);
-    return w;
+    chargePage_ = new ChargePage;
+    connect(chargePage_, &ChargePage::stopRequested,
+            this, [this] { controller_.request("STOP_CHARGE"); });
+    connect(chargePage_, &ChargePage::settleRequested,
+            this, [this] { controller_.request("SETTLE_ORDER"); });
+    connect(chargePage_, &ChargePage::findPileRequested,
+            this, [this] { switchTab(0); });
+    return chargePage_;
 }
 
 /** 订单与充值流水页。 */
 QWidget *UserWindow::buildOrders()
 {
-    auto *w = new QWidget;
-    auto *lay = new QVBoxLayout(w);
-    lay->setContentsMargins(24, 18, 24, 16);
-    lay->setSpacing(12);
-    orderFilter_ = new QComboBox;
-    orderFilter_->addItems({u8("全部订单"), u8("待结算优先"), u8("已完成"), u8("充电中")});
-    orderFilter_->setMinimumWidth(160);
-    orderFilter_->setMaximumWidth(220);
-    prepCombo(orderFilter_);
-    connect(orderFilter_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
-        renderOrders(lastOrders_);
-    });
-    lay->addWidget(orderFilter_);
-    auto *inner = new QWidget;
-    orderBox_ = new QVBoxLayout(inner);
-    orderBox_->setContentsMargins(0, 0, 8, 0);
-    orderBox_->setSpacing(10);
-    lay->addWidget(makeScroll(inner), 1);
-    return w;
+    ordersPage_ = new OrdersPage;
+    return ordersPage_;
 }
 
 /** 预约列表页。 */
 QWidget *UserWindow::buildReservations()
 {
-    auto *w = new QWidget;
-    auto *lay = new QVBoxLayout(w);
-    lay->setContentsMargins(24, 18, 24, 16);
-    lay->setSpacing(12);
-
-    auto *bar = new QFrame;
-    bar->setObjectName("toolbar");
-    auto *row = new QHBoxLayout(bar);
-    row->setContentsMargins(16, 12, 16, 12);
-    row->setSpacing(10);
-    auto *titleCol = new QVBoxLayout;
-    titleCol->setContentsMargins(0, 0, 0, 0);
-    titleCol->setSpacing(2);
-    auto *title = new QLabel(u8("已预约充电桩"));
-    title->setObjectName("title");
-    auto *sub = new QLabel(u8("集中查看尚未到期的预约，避免在附近电站列表中反复查找"));
-    sub->setObjectName("muted");
-    sub->setWordWrap(true);
-    titleCol->addWidget(title);
-    titleCol->addWidget(sub);
-    auto *refresh = new QPushButton(u8("刷新"));
-    refresh->setObjectName("ghost");
-    refresh->setMaximumWidth(96);
-    connect(refresh, &QPushButton::clicked, this, [this] {
-        if (!token_.isEmpty())
-            client_.request("LIST_RESERVATIONS", {}, token_);
+    reservationsPage_ = new ReservationsPage;
+    connect(reservationsPage_, &ReservationsPage::refreshRequested, this, [this] {
+        if (controller_.isAuthenticated()) controller_.request("LIST_RESERVATIONS");
     });
-    row->addLayout(titleCol, 1);
-    row->addWidget(refresh);
-    lay->addWidget(bar);
-
-    auto *hint = new QLabel(u8("预约默认保留 15 分钟；到期后会自动失效。如需充电，可直接从这里进入对应充电桩。"));
-    hint->setObjectName("muted");
-    hint->setWordWrap(true);
-    lay->addWidget(hint);
-
-    auto *inner = new QWidget;
-    reservationBox_ = new QVBoxLayout(inner);
-    reservationBox_->setContentsMargins(0, 0, 8, 0);
-    reservationBox_->setSpacing(10);
-    lay->addWidget(makeScroll(inner), 1);
-    return w;
+    connect(reservationsPage_, &ReservationsPage::findStationsRequested,
+            this, [this] { switchTab(0); });
+    connect(reservationsPage_, &ReservationsPage::stationRequested,
+            this, [this](const QJsonObject &station) {
+        currentStation_ = station;
+        controller_.request("QUERY_PILES", QJsonObject{{"stationId", station.value("id").toInt()}});
+    });
+    connect(reservationsPage_, &ReservationsPage::chargeRequested,
+            this, &UserWindow::tryStart);
+    connect(reservationsPage_, &ReservationsPage::cancelRequested,
+            this, [this] { controller_.request("CANCEL_RESERVE"); });
+    connect(reservationsPage_, &ReservationsPage::navigationRequested,
+            this, &UserWindow::openNav);
+    return reservationsPage_;
 }
 
 /** 个人中心。 */
@@ -924,7 +768,7 @@ QWidget *UserWindow::buildMe()
             uiWarn(this, u8("格式错误"), u8("昵称长度须为 1~20 个字符"));
             return;
         }
-        client_.request("UPDATE_PROFILE", QJsonObject{{"nickname", nick}}, token_);
+        controller_.request("UPDATE_PROFILE", QJsonObject{{"nickname", nick}});
     });
     lay->addSpacing(6);
     lay->addWidget(nickLab);
@@ -950,7 +794,7 @@ QWidget *UserWindow::buildMe()
             uiWarn(this, u8("金额错误"), u8("单笔充值须大于 0 且不超过 10000 元"));
             return;
         }
-        client_.request("RECHARGE", QJsonObject{{"amount", a}}, token_);
+        controller_.request("RECHARGE", QJsonObject{{"amount", a}});
     });
     lay->addSpacing(6);
     lay->addWidget(payLab);
@@ -962,10 +806,9 @@ QWidget *UserWindow::buildMe()
     logout->setObjectName("ghost");
     logout->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     connect(logout, &QPushButton::clicked, this, [this] {
-        token_.clear();
-        poll_.stop();
+        controller_.signOut();
         root_->setCurrentIndex(0);
-        loginHint_->setText(u8("已安全退出，请重新登录"));
+        loginPage_->setStatus(u8("已安全退出，请重新登录"));
         statusBar()->showMessage(u8("已退出登录"));
     });
     auto *closeAcc = new QPushButton(u8("注销账号"));
@@ -1013,102 +856,12 @@ QWidget *UserWindow::buildMe()
 /** 按登录页地址重新拨号。 */
 void UserWindow::reconnect()
 {
-    const QString host = serverHost();
-    const quint16 port = serverPort();
+    const QString host = loginPage_->serverHost();
+    const quint16 port = loginPage_->serverPort();
     QSettings ini(QStringLiteral("ChargeHub"), QStringLiteral("UserClient"));
-    ini.setValue("server", hostEdit_ ? hostEdit_->text().trimmed() : QString("%1:%2").arg(host).arg(port));
-    loginHint_->setText(u8("正在连接 ") + host + ":" + QString::number(port) + u8(" …"));
-    client_.connectTo(host, port);
-}
-
-/** 登录页主机；空则 127.0.0.1。 */
-QString UserWindow::serverHost() const
-{
-    QString raw = hostEdit_ ? hostEdit_->text().trimmed() : QStringLiteral("127.0.0.1");
-    if (raw.isEmpty())
-        raw = QStringLiteral("127.0.0.1");
-    if (raw.contains(QLatin1String("://")))
-        raw = raw.section(QLatin1String("://"), 1, 1);
-    raw = raw.section('/', 0, 0);
-    if (raw.count('.') >= 1 && raw.contains(':'))
-        return raw.section(':', 0, -2);
-    return raw;
-}
-
-quint16 UserWindow::serverPort() const
-{
-    QString raw = hostEdit_ ? hostEdit_->text().trimmed() : QString();
-    if (raw.contains(':')) {
-        const QString p = raw.section(':', -1);
-        bool ok = false;
-        const int n = p.toInt(&ok);
-        if (ok && n > 0 && n < 65536)
-            return quint16(n);
-    }
-    return 8888;
-}
-
-/** 连上后把挂起的 LOGIN/REGISTER 发出去。 */
-void UserWindow::sendPendingAuth()
-{
-    if (pendingAuth_.isEmpty() || !client_.isConnected())
-        return;
-    const QString act = pendingAuth_;
-    pendingAuth_.clear();
-    loginHint_->setText(act == QLatin1String("REGISTER") ? u8("正在注册…") : u8("正在登录…"));
-    client_.request(act, QJsonObject{{"phone", pendingPhone_}, {"password", pendingPwd_}}, QString());
-}
-
-/** 校验手机号密码后准备发 LOGIN。 */
-void UserWindow::doLogin()
-{
-    const QString phone = phone_->text().trimmed();
-    const QString pwd = pwd_->text();
-    if (!QRegularExpression(QStringLiteral("^1[3-9][0-9]{9}$")).match(phone).hasMatch()) {
-        uiWarn(this, u8("格式错误"), u8("请输入正确的手机号格式"));
-        return;
-    }
-    if (pwd.size() < 6 || pwd.size() > 20) {
-        uiWarn(this, u8("格式错误"), u8("密码长度须为 6~20 位"));
-        return;
-    }
-    pendingAuth_ = QStringLiteral("LOGIN");
-    pendingPhone_ = phone;
-    pendingPwd_ = pwd;
-    if (client_.isConnected()) {
-        sendPendingAuth();
-        return;
-    }
-    loginHint_->setText(u8("尚未连接，正在连接服务器…"));
-    reconnect();
-}
-
-/** 两次密码须一致，再发 REGISTER。 */
-void UserWindow::doRegister()
-{
-    const QString phone = phone_->text().trimmed();
-    const QString pwd = pwd_->text();
-    if (!QRegularExpression(QStringLiteral("^1[3-9][0-9]{9}$")).match(phone).hasMatch()) {
-        uiWarn(this, u8("格式错误"), u8("请输入正确的手机号格式"));
-        return;
-    }
-    if (pwd.size() < 6 || pwd.size() > 20) {
-        uiWarn(this, u8("格式错误"), u8("密码长度须为 6~20 位"));
-        return;
-    }
-    if (pwd != pwd2_->text()) {
-        uiWarn(this, u8("格式错误"), u8("两次输入的密码不一致"));
-        return;
-    }
-    pendingAuth_ = QStringLiteral("REGISTER");
-    pendingPhone_ = phone;
-    pendingPwd_ = pwd;
-    if (client_.isConnected()) {
-        sendPendingAuth();
-        return;
-    }
-    loginHint_->setText(u8("尚未连接，正在连接服务器…"));
-    reconnect();
+    ini.setValue("server", loginPage_->serverAddress());
+    loginPage_->setStatus(u8("正在连接 ") + host + ":" + QString::number(port) + u8(" …"));
+    controller_.connectTo(host, port);
 }
 
 /** 当前定位，给找站和导航。 */
@@ -1120,20 +873,19 @@ QJsonObject UserWindow::coord() const
 /** 发 QUERY_STATIONS。 */
 void UserWindow::queryStations()
 {
-    if (token_.isEmpty())
+    if (!controller_.isAuthenticated())
         return;
     QJsonObject data = coord();
     const double radii[] = {3, 5, 10, 20};
     data["radiusKm"] = radii[qBound(0, radius_ ? radius_->currentIndex() : 3, 3)];
     if (addrEdit_)
         data["address"] = addrEdit_->text().trimmed();
-    client_.request("QUERY_STATIONS", data, token_);
+    controller_.request("QUERY_STATIONS", data);
 }
 
-/** 存 user_，刷新顶栏余额头像。 */
+/** 用控制器维护的用户快照刷新顶栏余额和头像。 */
 void UserWindow::applyUser(const QJsonObject &u)
 {
-    user_ = u;
     const double bal = u.value("balance").toDouble();
     headBal_->setText(u8("余额 ¥") + QString::number(bal, 'f', 2));
     if (u.contains("lat"))
@@ -1144,7 +896,6 @@ void UserWindow::applyUser(const QJsonObject &u)
         addrEdit_->setText(u.value("address").toString());
     refreshMe();
 }
-
 /** 登录成功切到主壳并拉电站。 */
 void UserWindow::showShell()
 {
@@ -1172,7 +923,7 @@ void UserWindow::showAvatar(const QJsonObject &u)
 /** 选本地图，压小后 UPDATE_PROFILE。 */
 void UserWindow::pickAvatar()
 {
-    if (token_.isEmpty())
+    if (!controller_.isAuthenticated())
         return;
     const QString path = QFileDialog::getOpenFileName(this, u8("选择头像"), QString(),
                                                       u8("图片文件 (*.png *.jpg *.jpeg *.bmp *.webp)"));
@@ -1196,31 +947,32 @@ void UserWindow::pickAvatar()
         uiWarn(this, u8("图片过大"), u8("请选择更小的图片（压缩后需小于 400KB）"));
         return;
     }
-    client_.request("UPDATE_PROFILE",
-                    QJsonObject{{"avatarBase64", QString::fromLatin1(bytes.toBase64())}}, token_);
+    controller_.request("UPDATE_PROFILE",
+                        QJsonObject{{"avatarBase64", QString::fromLatin1(bytes.toBase64())}});
 }
 
 /** 清头像再 UPDATE_PROFILE。 */
 void UserWindow::clearAvatar()
 {
-    if (token_.isEmpty())
+    if (!controller_.isAuthenticated())
         return;
-    client_.request("UPDATE_PROFILE", QJsonObject{{"clearAvatar", true}}, token_);
+    controller_.request("UPDATE_PROFILE", QJsonObject{{"clearAvatar", true}});
 }
 
 /** 刷新「我的」页资料。 */
 void UserWindow::refreshMe()
 {
-    if (user_.isEmpty())
+    const QJsonObject user = controller_.user();
+    if (user.isEmpty())
         return;
-    const QString nick = user_.value("nickname").toString();
+    const QString nick = user.value("nickname").toString();
     meName_->setText(nick);
-    meBal_->setText(user_.value("phone").toString() + u8("  ·  钱包 ¥")
-                    + QString::number(user_.value("balance").toDouble(), 'f', 2));
+    meBal_->setText(user.value("phone").toString() + u8("  ·  钱包 ¥")
+                    + QString::number(user.value("balance").toDouble(), 'f', 2));
     nickEdit_->setText(nick);
-    showAvatar(user_);
-    if (!token_.isEmpty())
-        client_.request("LIST_RECHARGE", {}, token_);
+    showAvatar(user);
+    if (controller_.isAuthenticated())
+        controller_.request("LIST_RECHARGE");
 }
 
 /** 二次确认后 CLOSE_ACCOUNT。 */
@@ -1231,7 +983,7 @@ void UserWindow::closeMyAccount()
                   "同一手机号不能再注册。确定注销吗？"),
                u8("确认注销"), u8("再想想"), true))
         return;
-    client_.request("CLOSE_ACCOUNT", {}, token_);
+    controller_.request("CLOSE_ACCOUNT");
 }
 
 /** 画附近电站卡片。 */
@@ -1303,7 +1055,7 @@ void UserWindow::renderStations(const QJsonObject &data)
             go->setMaximumWidth(140);
             const int sid = p.value("stationId").toInt();
             connect(go, &QPushButton::clicked, this, [this, sid] {
-                client_.request("QUERY_PILES", QJsonObject{{"stationId", sid}}, token_);
+                controller_.request("QUERY_PILES", QJsonObject{{"stationId", sid}});
             });
             cl->addWidget(go, 0, Qt::AlignLeft);
             stationBox_->addWidget(c);
@@ -1360,7 +1112,7 @@ void UserWindow::renderStations(const QJsonObject &data)
         connect(nav, &QPushButton::clicked, this, [this, s] { openNav(s); });
         connect(go, &QPushButton::clicked, this, [this, s] {
             currentStation_ = s;
-            client_.request("QUERY_PILES", QJsonObject{{"stationId", s.value("id").toInt()}}, token_);
+            controller_.request("QUERY_PILES", QJsonObject{{"stationId", s.value("id").toInt()}});
         });
         btns->addWidget(nav);
         btns->addWidget(go);
@@ -1434,7 +1186,7 @@ void UserWindow::renderPiles(const QJsonObject &data)
         const int pid = p.value("id").toInt();
         connect(rsv, &QPushButton::clicked, this, [this, p, pid] {
             if (p.value("reservedByMe").toBool())
-                client_.request("CANCEL_RESERVE", {}, token_);
+                controller_.request("CANCEL_RESERVE");
             else
                 doReserve(pid);
         });
@@ -1458,67 +1210,8 @@ void UserWindow::renderPiles(const QJsonObject &data)
 /** 画订单卡片。 */
 void UserWindow::renderOrders(const QJsonArray &arr)
 {
-    lastOrders_ = arr;
-    clearBox(orderBox_);
-    QVector<QJsonObject> rows;
-    for (const auto &v : arr)
-        rows.append(v.toObject());
-    const int mode = orderFilter_ ? orderFilter_->currentIndex() : 0;
-    if (mode == 1)
-        std::sort(rows.begin(), rows.end(), [](const QJsonObject &a, const QJsonObject &b) {
-            auto rank = [](const QString &s) {
-                if (s == QString::fromUtf8("待结算")) return 0;
-                if (s == QString::fromUtf8("充电中")) return 1;
-                return 2;
-            };
-            return rank(a.value("status").toString()) < rank(b.value("status").toString());
-        });
-    if (arr.isEmpty()) {
-        auto *lab = new QLabel(u8("暂无订单，去首页找桩充电吧"));
-        lab->setObjectName("muted");
-        orderBox_->addWidget(lab);
-        orderBox_->addStretch();
-        return;
-    }
-    int shown = 0;
-    for (const auto &o : rows) {
-        const QString st = o.value("status").toString();
-        if (mode == 2 && st != u8("已完成"))
-            continue;
-        if (mode == 3 && st != u8("充电中"))
-            continue;
-        ++shown;
-        auto *c = card();
-        auto *cl = new QVBoxLayout(c);
-        cl->setContentsMargins(16, 12, 16, 12);
-        cl->setSpacing(6);
-        auto *head = new QHBoxLayout;
-        auto *no = new QLabel(o.value("orderNo").toString());
-        no->setObjectName("cardTitle");
-        auto *stPill = new QLabel(st);
-        if (st == u8("已完成"))
-            stPill->setObjectName("pillOk");
-        else if (st == u8("充电中"))
-            stPill->setObjectName("pillWarn");
-        else
-            stPill->setObjectName("pillOff");
-        head->addWidget(no, 1);
-        head->addWidget(stPill);
-        cl->addLayout(head);
-        auto *detail = new QLabel(QString("%1  %2\n电量 %3 kWh    ¥%4")
-                                      .arg(o.value("stationName").toString(), o.value("pileNo").toString())
-                                      .arg(o.value("energyKwh").toDouble(), 0, 'f', 3)
-                                      .arg(o.value("amount").toDouble(), 0, 'f', 2));
-        detail->setObjectName("muted");
-        cl->addWidget(detail);
-        orderBox_->addWidget(c);
-    }
-    if (shown == 0) {
-        auto *lab = new QLabel(u8("当前筛选下暂无订单"));
-        lab->setObjectName("muted");
-        orderBox_->addWidget(lab);
-    }
-    orderBox_->addStretch();
+    if (ordersPage_)
+        ordersPage_->setOrders(arr);
 }
 
 /** 画充值流水。 */
@@ -1550,133 +1243,18 @@ void UserWindow::renderRecharge(const QJsonArray &arr)
     rechargeBox_->addStretch();
 }
 
-/** 画预约列表。 */
-void UserWindow::renderReservations(const QJsonArray &arr)
-{
-    if (!reservationBox_)
-        return;
-    lastReservations_ = arr;
-    clearBox(reservationBox_);
-    if (arr.isEmpty()) {
-        auto *empty = new QLabel(u8("当前没有有效预约，去附近电站选择一个充电桩吧。"));
-        empty->setObjectName("muted");
-        reservationBox_->addWidget(empty);
-        auto *find = new QPushButton(u8("去附近电站"));
-        find->setObjectName("ghost");
-        find->setMaximumWidth(140);
-        connect(find, &QPushButton::clicked, this, [this] { switchTab(0); });
-        reservationBox_->addWidget(find, 0, Qt::AlignLeft);
-        reservationBox_->addStretch();
-        return;
-    }
-
-    for (const auto &v : arr) {
-        const auto r = v.toObject();
-        auto *c = card();
-        auto *cl = new QVBoxLayout(c);
-        cl->setContentsMargins(16, 14, 16, 14);
-        cl->setSpacing(8);
-
-        auto *head = new QHBoxLayout;
-        auto *name = new QLabel(
-            r.value("stationName").toString() + "  ·  " + r.value("pileNo").toString());
-        name->setObjectName("cardTitle");
-        auto *status = new QLabel(u8("预约中"));
-        status->setObjectName("pillOk");
-        head->addWidget(name, 1);
-        head->addWidget(status, 0, Qt::AlignRight | Qt::AlignVCenter);
-        cl->addLayout(head);
-
-        const int remaining = r.value("remainingSeconds").toInt();
-        QString remainText;
-        if (remaining > 0) {
-            const int minutes = remaining / 60;
-            const int seconds = remaining % 60;
-            remainText = QString::fromUtf8("剩余 %1 分 %2 秒").arg(minutes).arg(seconds, 2, 10, QChar('0'));
-        } else {
-            remainText = u8("即将到期");
-        }
-        auto *detail = new QLabel(
-            QString::fromUtf8("%1\n%2  ·  %3  ·  %4 kW  ·  ¥%5 / 度\n预约到期：%6（%7）")
-                .arg(r.value("address").toString())
-                .arg(r.value("pileNo").toString())
-                .arg(r.value("type").toString())
-                .arg(r.value("powerKw").toDouble(), 0, 'f', 0)
-                .arg(r.value("pricePerKwh").toDouble(), 0, 'f', 2)
-                .arg(r.value("expireAt").toString(), remainText));
-        detail->setObjectName("muted");
-        detail->setWordWrap(true);
-        cl->addWidget(detail);
-
-        auto *actions = new QHBoxLayout;
-        auto *view = new QPushButton(u8("查看该站电桩"));
-        view->setObjectName("ghost");
-        view->setMaximumWidth(140);
-        const int stationId = r.value("stationId").toInt();
-        const int pileId = r.value("pileId").toInt();
-        connect(view, &QPushButton::clicked, this, [this, r, stationId] {
-            currentStation_ = QJsonObject{
-                {"id", stationId},
-                {"name", r.value("stationName").toString()},
-                {"address", r.value("address").toString()},
-                {"lng", r.value("lng").toDouble()},
-                {"lat", r.value("lat").toDouble()},
-                {"pricePerKwh", r.value("pricePerKwh").toDouble()},
-            };
-            client_.request("QUERY_PILES", QJsonObject{{"stationId", stationId}}, token_);
-        });
-        auto *start = new QPushButton(u8("立即开始充电"));
-        start->setMaximumWidth(140);
-        start->setEnabled(r.value("pileStatus").toString() == u8("闲置"));
-        connect(start, &QPushButton::clicked, this, [this, pileId] { tryStart(pileId); });
-        auto *cancel = new QPushButton(u8("取消预约"));
-        cancel->setObjectName("danger");
-        cancel->setMaximumWidth(120);
-        connect(cancel, &QPushButton::clicked, this, [this] {
-            client_.request("CANCEL_RESERVE", {}, token_);
-        });
-        auto *navigate = new QPushButton(u8("位置 / 导航"));
-        navigate->setObjectName("ghost");
-        navigate->setMaximumWidth(120);
-        connect(navigate, &QPushButton::clicked, this, [this, r] {
-            openNav(QJsonObject{{"name", r.value("stationName").toString()},
-                                {"address", r.value("address").toString()},
-                                {"lat", r.value("lat").toDouble()},
-                                {"lng", r.value("lng").toDouble()}});
-        });
-        actions->addWidget(view);
-        actions->addWidget(start);
-        actions->addWidget(navigate);
-        actions->addWidget(cancel);
-        actions->addStretch();
-        cl->addLayout(actions);
-        reservationBox_->addWidget(c);
-    }
-    reservationBox_->addStretch();
-}
-
 /** 刷新充电页：时长、电量、费用、停充/结算按钮。 */
 void UserWindow::showCharge(const QJsonObject &order)
 {
     currentOrder_ = order;
     const QString st = order.value("status").toString();
-    chStatus_->setText(st.isEmpty() ? u8("暂无进行中的充电") : st);
-    const int sec = order.value("seconds").toInt();
-    chTime_->setText(QString("%1:%2").arg(sec / 60, 2, 10, QChar('0')).arg(sec % 60, 2, 10, QChar('0')));
-    chInfo_->setText(QString::fromUtf8("%1  %2\n订单 %3\n电量 %4 kWh\n费用 ¥%5\n%6 kW × %7 元/度")
-                         .arg(order.value("stationName").toString(), order.value("pileNo").toString())
-                         .arg(order.value("orderNo").toString())
-                         .arg(order.value("energyKwh").toDouble(), 0, 'f', 3)
-                         .arg(order.value("amount").toDouble(), 0, 'f', 2)
-                         .arg(order.value("powerKw").toDouble(), 0, 'f', 0)
-                         .arg(order.value("pricePerKwh").toDouble(), 0, 'f', 2));
-    stopBtn_->setVisible(st == u8("充电中"));
-    settleBtn_->setVisible(st == u8("待结算"));
+    if (chargePage_)
+        chargePage_->setOrder(order);
     if (st == u8("充电中") || st == u8("待结算")) {
         pages_->setCurrentIndex(2);
         if (nav_) {
             nav_->blockSignals(true);
-            nav_->setCurrentRow(1);
+            nav_->setCurrentRow(2);
             nav_->blockSignals(false);
         }
     }
@@ -1686,15 +1264,13 @@ void UserWindow::showCharge(const QJsonObject &order)
 /** 先 CHARGE_STATUS，没有未完成单再 START_CHARGE。 */
 void UserWindow::tryStart(int pileId)
 {
-    pendingPile_ = pileId;
-    wantStart_ = true;
-    client_.request("CHARGE_STATUS", {}, token_);
+    controller_.beginCharge(pileId);
 }
 
 /** 发 RESERVE_PILE。 */
 void UserWindow::doReserve(int pileId)
 {
-    client_.request("RESERVE_PILE", QJsonObject{{"pileId", pileId}}, token_);
+    controller_.request("RESERVE_PILE", QJsonObject{{"pileId", pileId}});
 }
 
 /** 切到评价页并拉该桩评论。 */
@@ -1710,7 +1286,7 @@ void UserWindow::openPileReview(const QJsonObject &pile)
     if (reviewCount_)
         reviewCount_->setText(u8("0 / 300"));
     switchTab(5);
-    client_.request("LIST_PILE_REVIEWS", QJsonObject{{"pileId", pileId}}, token_);
+    controller_.request("LIST_PILE_REVIEWS", QJsonObject{{"pileId", pileId}});
 }
 
 /** 点亮 1~n 颗星。 */
@@ -1831,12 +1407,11 @@ void UserWindow::submitReview()
         uiWarn(this, u8("评语不完整"), u8("请写下 2~300 字的充电体验，不能只打分"));
         return;
     }
-    client_.request("REVIEW_STATION",
-                    QJsonObject{{"stationId", currentStation_.value("id").toInt()},
-                                {"pileId", pileId},
-                                {"score", reviewStars_},
-                                {"comment", comment}},
-                    token_);
+    controller_.request("REVIEW_STATION",
+                        QJsonObject{{"stationId", currentStation_.value("id").toInt()},
+                                    {"pileId", pileId},
+                                    {"score", reviewStars_},
+                                    {"comment", comment}});
 }
 
 /** 用系统浏览器打开导航。 */
@@ -1998,13 +1573,6 @@ void UserWindow::queryTencentRoute(const QJsonObject &station, const QString &mo
     });
 }
 
-/** 充电中轮询 CHARGE_STATUS。 */
-void UserWindow::pollCharge()
-{
-    if (!token_.isEmpty() && currentOrder_.value("status").toString() == u8("充电中"))
-        client_.request("CHARGE_STATUS", {}, token_);
-}
-
 /** 失败弹提示；PUSH_CHARGE / CHARGE_STATUS 刷新充电页，不改登录态。 */
 /** 所有回包和 PUSH_CHARGE 的总入口：失败弹窗，成功按 type 刷新对应页。 */
 void UserWindow::onResp(QJsonObject obj)
@@ -2013,32 +1581,27 @@ void UserWindow::onResp(QJsonObject obj)
     const int code = obj.value("code").toInt();
     if (code != 0) {
         const QString msg = obj.value("message").toString();
-        loginHint_->setText(msg.isEmpty() ? u8("请求失败") : msg);
+        loginPage_->setStatus(msg.isEmpty() ? u8("请求失败") : msg);
         uiWarn(this, u8("提示"), msg.isEmpty() ? (type + u8(" 失败")) : msg);
         // 只有登录/注册失败才停在登录页；进首页后的接口失败不得把人踢回去
         if (type == "LOGIN" || type == "REGISTER") {
-            token_.clear();
+            controller_.signOut();
             root_->setCurrentIndex(0);
         }
-        wantStart_ = false;
         return;
     }
     const QJsonObject data = obj.value("data").toObject();
     if (type == "LOGIN" || type == "REGISTER") {
-        token_ = data.value("token").toString();
         showShell();
-        applyUser(data.value("user").toObject());
+        applyUser(controller_.user());
     } else if (type == "CLOSE_ACCOUNT") {
-        poll_.stop();
-        token_.clear();
-        user_ = {};
         locLat_ = 39.9644;
         locLng_ = 116.3473;
         if (addrEdit_)
             addrEdit_->clear();
         uiInfo(this, u8("账号已注销"),
                obj.value("message").toString(u8("账号已禁用留档，历史记录可追溯。")));
-        loginHint_->setText(u8("账号已注销留档，同一手机号不能再注册"));
+        loginPage_->setStatus(u8("账号已注销留档，同一手机号不能再注册"));
         root_->setCurrentIndex(0);
     } else if (type == "QUERY_STATIONS") {
         renderStations(data);
@@ -2047,18 +1610,18 @@ void UserWindow::onResp(QJsonObject obj)
     } else if (type == "RESERVE_PILE" || type == "CANCEL_RESERVE") {
         uiInfo(this, u8("ChargeHub"), obj.value("message").toString());
         if (pages_->currentIndex() == 6)
-            client_.request("LIST_RESERVATIONS", {}, token_);
+            controller_.request("LIST_RESERVATIONS");
         else if (currentStation_.value("id").toInt() > 0)
-            client_.request("QUERY_PILES", QJsonObject{{"stationId", currentStation_.value("id").toInt()}}, token_);
+            controller_.request("QUERY_PILES", QJsonObject{{"stationId", currentStation_.value("id").toInt()}});
         else
             queryStations();
     } else if (type == "REVIEW_STATION") {
         uiInfo(this, u8("ChargeHub"), obj.value("message").toString());
         const int pileId = currentPile_.value("id").toInt();
         if (pages_->currentIndex() == 5 && pileId > 0)
-            client_.request("LIST_PILE_REVIEWS", QJsonObject{{"pileId", pileId}}, token_);
+            controller_.request("LIST_PILE_REVIEWS", QJsonObject{{"pileId", pileId}});
         else if (currentStation_.value("id").toInt() > 0)
-            client_.request("QUERY_PILES", QJsonObject{{"stationId", currentStation_.value("id").toInt()}}, token_);
+            controller_.request("QUERY_PILES", QJsonObject{{"stationId", currentStation_.value("id").toInt()}});
         else
             queryStations();
     } else if (type == "LIST_PILE_REVIEWS") {
@@ -2069,63 +1632,40 @@ void UserWindow::onResp(QJsonObject obj)
             showCharge(order);
     } else if (type == "CHARGE_STATUS") {
         const QJsonObject order = data.value("order").toObject();
-        if (wantStart_) {
-            wantStart_ = false;
-            if (!order.isEmpty() && order.value("id").toInt() > 0) {
-                uiWarn(this, u8("无法开始充电"), u8("您有未完成的充电订单，请先结算"));
-                showCharge(order);
-                if (order.value("status").toString() == u8("充电中"))
-                    poll_.start(1000);
-                return;
-            }
-            client_.request("START_CHARGE", QJsonObject{{"pileId", pendingPile_}}, token_);
-            return;
-        }
         if (!order.isEmpty() && order.value("id").toInt() > 0) {
             showCharge(order);
-            if (order.value("status").toString() == u8("充电中"))
-                poll_.start(1000);
-            else
-                poll_.stop();
         } else if (pages_->currentIndex() == 2) {
-            poll_.stop();
             currentOrder_ = {};
-            chStatus_->setText(u8("暂无进行中的充电"));
-            chTime_->setText("00:00");
-            stopBtn_->hide();
-            settleBtn_->hide();
+            if (chargePage_)
+                chargePage_->clearOrder();
         }
     } else if (type == "START_CHARGE" || type == "STOP_CHARGE") {
         showCharge(data.value("order").toObject());
-        if (type == "START_CHARGE")
-            poll_.start(1000);
-        else
-            poll_.stop();
     } else if (type == "SETTLE_ORDER") {
-        poll_.stop();
-        applyUser(data.value("user").toObject());
+        applyUser(controller_.user());
         const auto o = data.value("order").toObject();
         uiInfo(this, u8("结算成功"),
                u8("订单 %1\n电量 %2 kWh\n费用 ¥%3\n余额 ¥%4")
                    .arg(o.value("orderNo").toString())
                    .arg(o.value("energyKwh").toDouble(), 0, 'f', 3)
                    .arg(o.value("amount").toDouble(), 0, 'f', 2)
-                   .arg(user_.value("balance").toDouble(), 0, 'f', 2));
+                   .arg(controller_.user().value("balance").toDouble(), 0, 'f', 2));
         currentOrder_ = {};
         switchTab(3);
     } else if (type == "LIST_ORDERS") {
         renderOrders(data.value("orders").toArray());
     } else if (type == "LIST_RESERVATIONS") {
-        renderReservations(data.value("reservations").toArray());
+        if (reservationsPage_)
+            reservationsPage_->setReservations(data.value("reservations").toArray());
     } else if (type == "RECHARGE") {
         uiInfo(this, u8("充值成功"),
                u8("流水号 %1\n金额 ¥%2")
                    .arg(data.value("tradeNo").toString())
                    .arg(data.value("amount").toDouble(), 0, 'f', 2));
         // applyUser() calls refreshMe(), which requests LIST_RECHARGE once when logged in.
-        applyUser(data.value("user").toObject());
+        applyUser(controller_.user());
     } else if (type == "UPDATE_PROFILE") {
-        applyUser(data.value("user").toObject());
+        applyUser(controller_.user());
         uiInfo(this, u8("ChargeHub"), obj.value("message").toString());
     } else if (type == "LIST_RECHARGE") {
         renderRecharge(data.value("records").toArray());
