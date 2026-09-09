@@ -2489,6 +2489,25 @@ void UserWindow::onResp(QJsonObject obj)
     if (code != 0) {
         const QString msg = obj.value("message").toString();
         loginPage_->setStatus(msg.isEmpty() ? u8("请求失败") : msg);
+
+        // 已登录后的业务请求收到 401/403，说明 token 失效或账号已被冻结/注销。
+        // 先清理会话并切回登录页，这样无论用户按确认还是点右上角关闭，
+        // 弹窗消失后都不会留在已失效的业务页。
+        const bool protectedRequestRejected = type != QLatin1String("LOGIN")
+            && type != QLatin1String("REGISTER") && (code == 401 || code == 403);
+        // 退出后可能还有数个在途请求陆续返回鉴权失败，忽略它们，避免重复弹窗。
+        if (protectedRequestRejected && !controller_.isAuthenticated())
+            return;
+        const bool sessionRejected = controller_.isAuthenticated() && protectedRequestRejected;
+        if (sessionRejected) {
+            controller_.signOut();
+            autoLoginAttempt_ = false;
+            root_->setCurrentIndex(0);
+            uiWarn(this, u8("登录失效"),
+                   msg.isEmpty() ? u8("登录已失效，请重新登录") : msg);
+            return;
+        }
+
         uiWarn(this, u8("提示"), msg.isEmpty() ? (type + u8(" 失败")) : msg);
         // 只有登录/注册失败才停在登录页；进首页后的接口失败不得把人踢回去
         if (type == "LOGIN" || type == "REGISTER") {
