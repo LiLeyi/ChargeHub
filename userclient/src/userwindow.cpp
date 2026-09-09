@@ -21,6 +21,7 @@
 #include <QDesktopServices>
 #include <QFileDialog>
 #include <QFrame>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QImage>
 #include <QIODevice>
@@ -1753,25 +1754,26 @@ void UserWindow::showStationLocation(const QJsonObject &station)
     map->setScaledContents(false);
     dialog.body()->addWidget(map, 1);
 
-    auto *routeBar = new QHBoxLayout;
-    routeBar->setSpacing(10);
-    routeBar->addWidget(uiFieldLabel(u8("出行方式")));
+    auto *routeBar = new QGridLayout;
+    routeBar->setHorizontalSpacing(10);
+    routeBar->setVerticalSpacing(8);
+    routeBar->addWidget(uiFieldLabel(u8("出行方式")), 0, 0);
     auto *mode = new QComboBox;
     mode->addItem(u8("驾车"), QStringLiteral("drive"));
     mode->addItem(u8("步行"), QStringLiteral("walk"));
     mode->addItem(u8("骑行"), QStringLiteral("bike"));
     mode->addItem(u8("公交"), QStringLiteral("bus"));
-    mode->setMinimumWidth(140);
+    mode->setMinimumWidth(120);
     prepCombo(mode);
-    routeBar->addWidget(mode);
+    routeBar->addWidget(mode, 0, 1);
     auto *route = new QPushButton(u8("查询路线"));
-    routeBar->addWidget(route);
+    routeBar->addWidget(route, 0, 2);
     auto *open = new QPushButton(u8("开始导航"));
-    routeBar->addWidget(open);
+    routeBar->addWidget(open, 1, 0, 1, 2);
     auto *osm = new QPushButton(u8("网页路线"));
     osm->setObjectName("ghost");
-    routeBar->addWidget(osm);
-    routeBar->addStretch();
+    routeBar->addWidget(osm, 1, 2);
+    routeBar->setColumnStretch(1, 1);
     dialog.body()->addLayout(routeBar);
 
     auto *originHint = new QLabel;
