@@ -98,7 +98,7 @@ private:
     void setReviewStars(int n);
     /** 文字不能空，发 REVIEW_STATION（stationId/pileId/score/comment）。 */
     void submitReview();
-    /** 弹出地图+天气+路线；静态图和天气走腾讯 HTTP，不经 Dispatch。 */
+    /** 弹出地图+天气+路线；天气优先走高德 HTTP，不经 Dispatch。 */
     void showStationLocation(const QJsonObject &station);
     /** 找站成功后按当前定位拉天气，写到附近电站页。 */
     void fetchLocalWeather();
@@ -151,7 +151,7 @@ private:
     void highlightTab(int pageIndex);
 
     UserController controller_;
-    QNetworkAccessManager *mapNetwork_ = nullptr; ///< 仅腾讯地图 HTTP
+    QNetworkAccessManager *mapNetwork_ = nullptr; ///< 地图、天气与路线 HTTP
     QJsonObject currentStation_;                  ///< 点进去的那座站
     QJsonObject currentOrder_;                    ///< 充电页正在看的订单
     QJsonObject currentPile_;                     ///< 评价页正在看的桩

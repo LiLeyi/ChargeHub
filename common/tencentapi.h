@@ -3,11 +3,11 @@
 
 /**
  * @file tencentapi.h
- * @brief 腾讯位置服务：静态图、路线、天气、地址解析。Key/SK 来自环境变量或本机凭证文件。
+ * @brief 高德位置服务适配：静态图、天气、地址解析；保留旧文件名以兼容工程。
  *
  * 用户端自己 HTTP 拉图/路线/天气，不经 Dispatch。
  * 管理端 refreshForecast / 找站兜底走同步查询。
- * 腾讯配额用尽时：天气改 Open-Meteo，地图默认 Carto/OSM 瓦片（无日调用上限），路线改 OSRM，地址改 Nominatim。
+ * 高德请求失败时：天气回退 Open-Meteo，地图保留 Carto/OSM，路线保留 OSRM，地址回退 Nominatim。
  * 用户端定位优先 Windows 定位服务，其次地图选点；公网 IP 只作城市级参考。
  */
 
@@ -21,9 +21,8 @@
 namespace TencentApi {
 
 QString key();
-QString sk();
 
-/** 拼 https://apis.map.qq.com + path，参数按 key 排序；有 SK 则带 sig。 */
+/** 拼接高德 Web 服务 URL，并附加 key。 */
 QUrl signedUrl(const QString &path, QList<QPair<QString, QString>> params);
 
 QNetworkRequest request(const QUrl &url);
@@ -42,7 +41,9 @@ struct Weather {
     QString source;
 };
 
-QUrl weatherNowUrl(double lat, double lng);
+QUrl weatherAdcodeUrl(double lat, double lng);
+QString parseWeatherAdcode(const QJsonObject &obj);
+QUrl weatherNowUrl(const QString &adcode);
 Weather parseWeather(const QJsonObject &obj);
 
 /** 实况天气。失败 ok=false，调用方自己用模拟值。 */
@@ -55,7 +56,7 @@ struct Geo {
     double lng = 0;
 };
 
-/** 地址转坐标。失败 ok=false。腾讯失败时再试 Nominatim。 */
+/** 地址转坐标。失败 ok=false。高德失败时再试 Nominatim。 */
 Geo geocode(const QString &address);
 
 QUrl fallbackMapUrl(double lat, double lng, int zoom = 15);

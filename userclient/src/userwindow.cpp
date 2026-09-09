@@ -43,6 +43,7 @@
 #include <QStringList>
 #include <QStyle>
 #include <QTextCursor>
+#include <QtMath>
 #include <QUrl>
 #include <QUrlQuery>
 #include <QTimer>
@@ -1286,7 +1287,7 @@ void UserWindow::closeMyAccount()
     controller_.request("CLOSE_ACCOUNT");
 }
 
-/** 按当前定位拉天气，写到附近电站页顶部。腾讯配额用尽时改 Open-Meteo。 */
+/** 按当前定位拉天气，高德失败时回退 Open-Meteo。 */
 void UserWindow::fetchLocalWeather()
 {
     if (!weatherHint_ || !mapNetwork_)
@@ -1314,15 +1315,26 @@ void UserWindow::fetchLocalWeather()
         meteo();
         return;
     }
-    auto *reply = mapNetwork_->get(TencentApi::request(TencentApi::weatherNowUrl(lat, lng)));
+    auto *reply = mapNetwork_->get(TencentApi::request(TencentApi::weatherAdcodeUrl(lat, lng)));
     connect(reply, &QNetworkReply::finished, this, [this, reply, apply, meteo] {
-        const TencentApi::Weather wx =
-            TencentApi::parseWeather(QJsonDocument::fromJson(reply->readAll()).object());
+        const QString adcode = TencentApi::parseWeatherAdcode(
+            QJsonDocument::fromJson(reply->readAll()).object());
         reply->deleteLater();
-        if (wx.ok)
-            apply(wx);
-        else
+        if (adcode.isEmpty()) {
             meteo();
+            return;
+        }
+        auto *weatherReply = mapNetwork_->get(
+            TencentApi::request(TencentApi::weatherNowUrl(adcode)));
+        connect(weatherReply, &QNetworkReply::finished, this, [weatherReply, apply, meteo] {
+            const TencentApi::Weather wx = TencentApi::parseWeather(
+                QJsonDocument::fromJson(weatherReply->readAll()).object());
+            weatherReply->deleteLater();
+            if (wx.ok)
+                apply(wx);
+            else
+                meteo();
+        });
     });
 }
 
@@ -1805,19 +1817,50 @@ void UserWindow::showStationLocation(const QJsonObject &station)
     const QPointer<QLabel> mapGuard(map);
     const QPointer<QLabel> weatherGuard(weather);
     if (mapNetwork_) {
-        auto *fb = mapNetwork_->get(TencentApi::request(TencentApi::fallbackMapUrl(lat, lng)));
-        connect(fb, &QNetworkReply::finished, this, [fb, mapGuard] {
+        auto *mapReply = mapNetwork_->get(TencentApi::request(TencentApi::staticMapUrl(lat, lng)));
+        connect(mapReply, &QNetworkReply::finished, this, [this, mapReply, mapGuard, lat, lng] {
+            const QByteArray raw = mapReply->readAll();
+            QPixmap pix;
+            const bool loaded = mapReply->error() == QNetworkReply::NoError
+                                && pix.loadFromData(raw);
+            QString amapError;
+            if (mapReply->error() != QNetworkReply::NoError) {
+                amapError = mapReply->errorString();
+            } else {
+                const QJsonObject errorBody = QJsonDocument::fromJson(raw).object();
+                amapError = errorBody.value(QStringLiteral("info")).toString();
+                if (amapError.isEmpty())
+                    amapError = u8("返回内容不是有效图片");
+            }
             if (mapGuard) {
-                QPixmap pix;
-                if (fb->error() == QNetworkReply::NoError && pix.loadFromData(fb->readAll())) {
+                if (loaded) {
                     mapGuard->setPixmap(pix.scaled(mapGuard->size(), Qt::KeepAspectRatio,
                                                    Qt::SmoothTransformation));
                     mapGuard->setText(QString());
                 } else {
-                    mapGuard->setText(u8("地图图片暂时无法加载，可点击“开始导航”打开路线。"));
+                    mapGuard->setText(u8("高德地图加载失败，正在尝试备用地图…"));
+                    auto *fallback = mapNetwork_->get(
+                        TencentApi::request(TencentApi::fallbackMapUrl(lat, lng)));
+                    connect(fallback, &QNetworkReply::finished, this, [fallback, mapGuard, amapError] {
+                        const QByteArray fallbackRaw = fallback->readAll();
+                        QPixmap fallbackPix;
+                        if (mapGuard && fallback->error() == QNetworkReply::NoError
+                            && fallbackPix.loadFromData(fallbackRaw)) {
+                            mapGuard->setPixmap(fallbackPix.scaled(
+                                mapGuard->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                            mapGuard->setText(QString());
+                        } else if (mapGuard) {
+                            const QString detail = fallback->error() == QNetworkReply::NoError
+                                ? u8("返回内容不是有效图片") : fallback->errorString();
+                            mapGuard->setText(u8("高德地图：") + amapError
+                                              + u8("；备用地图：") + detail
+                                              + u8("。可点击“开始导航”打开路线。"));
+                        }
+                        fallback->deleteLater();
+                    });
                 }
             }
-            fb->deleteLater();
+            mapReply->deleteLater();
         });
         auto applyWx = [weatherGuard](const TencentApi::Weather &wx) {
             if (!weatherGuard)
@@ -1827,13 +1870,31 @@ void UserWindow::showStationLocation(const QJsonObject &station)
             else
                 weatherGuard->setText(u8("天气暂不可用，仍可查看位置和路线。"));
         };
-        auto *wreply = mapNetwork_->get(TencentApi::request(TencentApi::weatherNowUrl(lat, lng)));
+        auto *wreply = mapNetwork_->get(TencentApi::request(TencentApi::weatherAdcodeUrl(lat, lng)));
         connect(wreply, &QNetworkReply::finished, this, [this, wreply, lat, lng, applyWx] {
-            const TencentApi::Weather wx =
-                TencentApi::parseWeather(QJsonDocument::fromJson(wreply->readAll()).object());
+            const QString adcode = TencentApi::parseWeatherAdcode(
+                QJsonDocument::fromJson(wreply->readAll()).object());
             wreply->deleteLater();
-            if (wx.ok) {
-                applyWx(wx);
+            if (!adcode.isEmpty()) {
+                auto *weatherReply = mapNetwork_->get(
+                    TencentApi::request(TencentApi::weatherNowUrl(adcode)));
+                connect(weatherReply, &QNetworkReply::finished, this,
+                        [this, weatherReply, lat, lng, applyWx] {
+                    const TencentApi::Weather wx = TencentApi::parseWeather(
+                        QJsonDocument::fromJson(weatherReply->readAll()).object());
+                    weatherReply->deleteLater();
+                    if (wx.ok) {
+                        applyWx(wx);
+                        return;
+                    }
+                    auto *fb = mapNetwork_->get(
+                        TencentApi::request(TencentApi::openMeteoUrl(lat, lng)));
+                    connect(fb, &QNetworkReply::finished, this, [fb, applyWx] {
+                        applyWx(TencentApi::parseOpenMeteo(
+                            QJsonDocument::fromJson(fb->readAll()).object()));
+                        fb->deleteLater();
+                    });
+                });
                 return;
             }
             auto *fb = mapNetwork_->get(TencentApi::request(TencentApi::openMeteoUrl(lat, lng)));
