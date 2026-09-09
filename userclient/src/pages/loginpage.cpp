@@ -56,13 +56,13 @@ LoginPage::LoginPage(QWidget *parent) : QWidget(parent)
     phoneEdit_->setPlaceholderText(u8("手机号"));
     connect(phoneEdit_, &QLineEdit::textChanged, this, &LoginPage::onPhoneTextChanged);
 
-    passwordEdit_ = new QLineEdit(QStringLiteral("ABCabc123"));
+    passwordEdit_ = new QLineEdit(QStringLiteral("123456"));
     passwordEdit_->setEchoMode(QLineEdit::Password);
-    passwordEdit_->setPlaceholderText(u8("密码（6~20 位，含大小写和数字）"));
+    passwordEdit_->setPlaceholderText(u8("密码（6~20 位）"));
 
     confirmEdit_ = new QLineEdit(QStringLiteral(""));
     confirmEdit_->setEchoMode(QLineEdit::Password);
-    confirmEdit_->setPlaceholderText(u8("确认密码（注册时填写）"));
+    confirmEdit_->setPlaceholderText(u8("确认密码（注册时填写，须含大小写和数字）"));
     confirmEdit_->hide();
 
     auto *loginButton = new QPushButton(u8("登录"));
@@ -76,7 +76,7 @@ LoginPage::LoginPage(QWidget *parent) : QWidget(parent)
 
     statusLabel_ = new QLabel(u8("正在连接服务器..."));
     statusLabel_->setObjectName(QStringLiteral("muted"));
-    auto *tips = new QLabel(u8("演示号 13800138000 / ABCabc123"));
+    auto *tips = new QLabel(u8("演示号 13800138000 / 123456"));
     tips->setObjectName(QStringLiteral("muted"));
     tips->setWordWrap(true);
 
@@ -137,7 +137,7 @@ void LoginPage::onPhoneTextChanged(const QString &text)
 void LoginPage::submitLogin()
 {
     QString phone, password;
-    if (!validateCredentials(&phone, &password)) return;
+    if (!validateCredentials(&phone, &password, false)) return;
     setStatus(u8("正在登录…"));
     emit authenticationRequested(QStringLiteral("LOGIN"), phone, password);
 }
@@ -145,7 +145,7 @@ void LoginPage::submitLogin()
 void LoginPage::submitRegistration()
 {
     QString phone, password;
-    if (!validateCredentials(&phone, &password)) return;
+    if (!validateCredentials(&phone, &password, true)) return;
 
     // 如果是注册模式，检查确认密码
     if (isRegisterMode_) {
@@ -159,7 +159,7 @@ void LoginPage::submitRegistration()
     emit authenticationRequested(QStringLiteral("REGISTER"), phone, password);
 }
 
-bool LoginPage::validateCredentials(QString *phone, QString *password)
+bool LoginPage::validateCredentials(QString *phone, QString *password, bool isRegister)
 {
     *phone = phoneEdit_->text().trimmed();
     *password = passwordEdit_->text();
@@ -169,23 +169,26 @@ bool LoginPage::validateCredentials(QString *phone, QString *password)
         return false;
     }
 
-    // 密码强度检测：长度6-20，包含大小写和数字
+    // 密码长度检测（登录和注册都检查）
     if (password->size() < 6 || password->size() > 20) {
         uiWarn(this, u8("密码错误"), u8("密码长度须为 6~20 位"));
         return false;
     }
 
-    bool hasUpper = false, hasLower = false, hasDigit = false;
-    for (const QChar &ch : *password) {
-        if (ch.isUpper()) hasUpper = true;
-        else if (ch.isLower()) hasLower = true;
-        else if (ch.isDigit()) hasDigit = true;
-    }
+    // 只有注册时才进行强密码检验（包含大小写和数字）
+    if (isRegister) {
+        bool hasUpper = false, hasLower = false, hasDigit = false;
+        for (const QChar &ch : *password) {
+            if (ch.isUpper()) hasUpper = true;
+            else if (ch.isLower()) hasLower = true;
+            else if (ch.isDigit()) hasDigit = true;
+        }
 
-    if (!hasUpper || !hasLower || !hasDigit) {
-        uiWarn(this, u8("密码强度不足"),
-               u8("密码必须包含大写字母、小写字母和数字"));
-        return false;
+        if (!hasUpper || !hasLower || !hasDigit) {
+            uiWarn(this, u8("密码强度不足"),
+                   u8("注册密码必须包含大写字母、小写字母和数字"));
+            return false;
+        }
     }
 
     return true;
