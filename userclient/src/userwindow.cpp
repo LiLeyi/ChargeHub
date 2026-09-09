@@ -50,6 +50,7 @@
 #include <QWheelEvent>
 #include <QTimer>
 #include <QSettings>
+#include <QtMath>
 
 static QString u8(const char *s) { return QString::fromUtf8(s); }
 

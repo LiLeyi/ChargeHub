@@ -11,10 +11,11 @@ QString nowStr() { return QDateTime::currentDateTime().toString("yyyy-MM-dd HH:m
 
 ReservationService::ReservationService(Database *db) : db_(db) {}
 
-void ReservationService::expire() const
+bool ReservationService::expire() const
 {
-    db_->execute("UPDATE reservation SET status=?, no_show=1 WHERE status=? AND expire_at < ?",
-                 {QString::fromUtf8("已取消"), QString::fromUtf8("有效"), nowStr()});
+    return db_->executeAffected(
+               "UPDATE reservation SET status=?, no_show=1 WHERE status=? AND expire_at < ?",
+               {QString::fromUtf8("已取消"), QString::fromUtf8("有效"), nowStr()}) >= 0;
 }
 
 QVariantMap ReservationService::activeForPile(int pileId) const
@@ -60,7 +61,8 @@ QJsonObject ReservationService::list(const QVariantMap &user) const
 
 QJsonObject ReservationService::reserve(const QVariantMap &user, const QJsonObject &data)
 {
-    expire();
+    if (!expire())
+        return {{"errorCode", 500}, {"error", QString::fromUtf8("预约状态更新失败，请稍后重试")}};
     const int pileId = data.value("pileId").toInt();
     const auto pile = db_->one("SELECT * FROM pile WHERE id=?", {pileId});
     if (pile.isEmpty()) return {{"errorCode", 404}, {"error", QString::fromUtf8("电桩不存在")}};
@@ -74,6 +76,8 @@ QJsonObject ReservationService::reserve(const QVariantMap &user, const QJsonObje
     const int id = db_->execute(
         "INSERT INTO reservation(user_id,pile_id,status,expire_at,created_at) VALUES(?,?,?,?,?)",
         {user.value("id"), pileId, QString::fromUtf8("有效"), expiry, nowStr()});
+    if (id <= 0)
+        return {{"errorCode", 500}, {"error", QString::fromUtf8("预约创建失败，请稍后重试")}};
     return {{"reservation", QJsonObject{{"id", id}, {"pileId", pileId}, {"expireAt", expiry}}}};
 }
 
@@ -82,15 +86,21 @@ QJsonObject ReservationService::cancel(const QVariantMap &user)
     const auto row = db_->one("SELECT * FROM reservation WHERE user_id=? AND status='有效' ORDER BY id DESC LIMIT 1",
                               {user.value("id")});
     if (row.isEmpty()) return {{"errorCode", 404}, {"error", QString::fromUtf8("没有有效预约")}};
-    db_->execute("UPDATE reservation SET status=? WHERE id=?",
-                 {QString::fromUtf8("已取消"), row.value("id")});
+    const qint64 affected = db_->executeAffected(
+        "UPDATE reservation SET status=? WHERE id=? AND status=?",
+        {QString::fromUtf8("已取消"), row.value("id"), QString::fromUtf8("有效")});
+    if (affected < 0)
+        return {{"errorCode", 500}, {"error", QString::fromUtf8("取消预约失败，请稍后重试")}};
+    if (affected == 0)
+        return {{"errorCode", 409}, {"error", QString::fromUtf8("预约状态已变化，请刷新后重试")}};
     return {};
 }
 
 bool ReservationService::fulfill(int reservationId)
 {
-    return db_->execute("UPDATE reservation SET status=? WHERE id=?",
-                        {QString::fromUtf8("已履约"), reservationId}) >= 0;
+    return db_->executeAffected(
+               "UPDATE reservation SET status=? WHERE id=? AND status=?",
+               {QString::fromUtf8("已履约"), reservationId, QString::fromUtf8("有效")}) == 1;
 }
 
 void ReservationService::cancelActiveForUser(int userId)

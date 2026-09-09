@@ -11,7 +11,7 @@ class ReservationService {
 public:
     explicit ReservationService(Database *db);
 
-    void expire() const;
+    bool expire() const;
     QVariantMap activeForPile(int pileId) const;
     bool pileIsIdle(const QVariantMap &pile) const;
     QJsonObject list(const QVariantMap &user) const;

@@ -5,7 +5,7 @@
  * @file database.h
  * @brief SQLite 封装：管理端进程里唯一的写库入口。
  *
- * 【职责】打开 chargehub.db，提供 query / one / execute / transaction。
+ * 【职责】打开 chargehub.db，提供 query / one / execute / executeAffected / transaction。
  * 【原理】每条 SQL 带互斥锁；transaction(fn) 在 BEGIN 里跑 fn，false 则 ROLLBACK。
  *         开充、停充、结算、充值必须走事务，避免「扣了钱订单没落」。
  * 【协作】只被 Dispatch 当写者。用户端禁止 open。大屏/预测用 Python 另开只读或只写分析表。
@@ -54,6 +54,12 @@ public:
      * @return 成功：INSERT 返回 lastInsertId，UPDATE/DELETE 常为 0；失败返回 -1，并写入 lastError_。
      */
     int execute(const QString &sql, const QVariantList &args = {});
+
+    /**
+     * 执行 UPDATE / DELETE 等需要检查命中行数的写语句。
+     * @return 成功返回实际影响行数（可为 0），失败返回 -1，并写入 lastError_。
+     */
+    qint64 executeAffected(const QString &sql, const QVariantList &args = {});
 
     /**
      * 事务：BEGIN → 跑 fn → fn 返回 true 且 COMMIT 成功才算成功，否则 ROLLBACK。
