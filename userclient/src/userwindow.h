@@ -8,7 +8,7 @@
  * 【职责】画界面、做格式校验、把页面操作交给 UserController；不写 SQLite。
  * 【原理】root_ 两页（登录 / 主壳）；pages_ 里各业务页。网络状态由 UserController 管理。
  *         回包统一 onResp：失败弹 UiSheet；PUSH_CHARGE 只刷新充电页。
- * 【协作】依赖 UserController、uidialog。地图用国内高德/腾讯瓦片，可拖动、滚轮缩放，不经过管理端业务。
+ * 【协作】依赖 UserController、uidialog。地图用国内高德瓦片，可拖动、滚轮缩放，不经过管理端业务。
  * 【联调】服务器填管理端底栏 IP:8888；本机自测 127.0.0.1:8888。
  * 【详见】docs/模块与协作说明.md
  */
@@ -54,6 +54,8 @@ private slots:
     void startLocate();
     /** 调 Windows 定位服务（Wi-Fi/系统定位）。 */
     void tryWindowsLocate();
+    /** Ubuntu/虚拟机使用公网 IP 获取城市级参考位置，全程不弹窗。 */
+    void fetchLocationByIP();
     /** 在地图上点选当前位置；确定则按该点找桩。 */
     bool pickMyLocation();
     /** 把选好的点记为导航/找桩起点。 */
@@ -98,7 +100,7 @@ private:
     void setReviewStars(int n);
     /** 文字不能空，发 REVIEW_STATION（stationId/pileId/score/comment）。 */
     void submitReview();
-    /** 弹出地图+天气+路线；瓦片可拖动滚轮缩放，天气走腾讯 HTTP，不经 Dispatch。 */
+    /** 弹出地图+天气+路线；瓦片可拖动滚轮缩放，天气走高德 HTTP，不经 Dispatch。 */
     void showStationLocation(const QJsonObject &station);
     /** 找站成功后按当前定位拉天气，写到附近电站页。 */
     void fetchLocalWeather();
@@ -149,7 +151,7 @@ private:
     void highlightTab(int pageIndex);
 
     UserController controller_;
-    QNetworkAccessManager *mapNetwork_ = nullptr; ///< 仅腾讯地图 HTTP
+    QNetworkAccessManager *mapNetwork_ = nullptr; ///< 地图、天气与定位 HTTP
     QJsonObject currentStation_;                  ///< 点进去的那座站
     QJsonObject currentOrder_;                    ///< 充电页正在看的订单
     QJsonObject currentPile_;                     ///< 评价页正在看的桩
@@ -171,6 +173,7 @@ private:
     bool useGps_ = false;
     bool pendingConsent_ = false;
     QString gpsPlace_;
+    QJsonArray mapStations_;                     ///< 地图选点页绘制的全部充电站轻量坐标
     QComboBox *pileType_ = nullptr;
     QVBoxLayout *stationBox_ = nullptr;
     QLabel *pileTitle_ = nullptr;

@@ -135,6 +135,7 @@ QJsonObject StationService::queryStations(const QVariantMap &user, const QJsonOb
     const double lng = hit.lng;
     const double radius = data.value("radiusKm").toDouble(20);
     QJsonArray arr;
+    QJsonArray mapStations;
     QVector<QJsonObject> tmp;
     QVector<QJsonObject> nearPiles;
     for (const auto &s : stations) {
@@ -172,6 +173,14 @@ QJsonObject StationService::queryStations(const QVariantMap &user, const QJsonOb
                 });
             }
         }
+        mapStations.append(QJsonObject{
+            {"id", s.value("id").toInt()},
+            {"name", s.value("name").toString()},
+            {"lat", s.value("lat").toDouble()},
+            {"lng", s.value("lng").toDouble()},
+            {"idlePiles", idle},
+            {"totalPiles", piles.size()},
+        });
         if (radius > 0 && dist > radius)
             continue;
         auto rev = db_->one("SELECT IFNULL(AVG(score),0) AS a, COUNT(*) AS n FROM station_review WHERE station_id=?",
@@ -214,6 +223,7 @@ QJsonObject StationService::queryStations(const QVariantMap &user, const QJsonOb
         nearby.append(nearPiles[i]);
     return QJsonObject{
         {"stations", arr},
+        {"mapStations", mapStations},
         {"nearbyPiles", nearby},
         {"location", QJsonObject{
              {"address", address},

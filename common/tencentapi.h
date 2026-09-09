@@ -3,14 +3,15 @@
 
 /**
  * @file tencentapi.h
- * @brief 腾讯位置服务：静态图、路线、天气、地址解析。Key/SK 来自环境变量或本机凭证文件。
+ * @brief 高德位置服务适配：地图、天气和地址解析；保留旧文件名兼容工程。
  *
  * 用户端自己 HTTP 拉图/路线/天气，不经 Dispatch。
  * 管理端 refreshForecast / 找站兜底走同步查询。
- * 腾讯配额用尽时：天气改 Open-Meteo；地图改高德/腾讯瓦片（国内可访问，不走 OSM）。
+ * 高德请求失败时：天气回退 Open-Meteo，路线距离使用 OSRM。
  * 用户端定位优先 Windows 定位服务，其次地图选点；公网 IP 只作城市级参考。
  */
 
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QList>
 #include <QNetworkRequest>
@@ -21,9 +22,8 @@
 namespace TencentApi {
 
 QString key();
-QString sk();
 
-/** 拼 https://apis.map.qq.com + path，参数按 key 排序；有 SK 则带 sig。 */
+/** 拼接高德 WebService URL 并附加 key。 */
 QUrl signedUrl(const QString &path, QList<QPair<QString, QString>> params);
 
 QNetworkRequest request(const QUrl &url);
@@ -42,7 +42,9 @@ struct Weather {
     QString source;
 };
 
-QUrl weatherNowUrl(double lat, double lng);
+QUrl weatherAdcodeUrl(double lat, double lng);
+QString parseWeatherAdcode(const QJsonObject &obj);
+QUrl weatherNowUrl(const QString &adcode);
 Weather parseWeather(const QJsonObject &obj);
 
 /** 实况天气。失败 ok=false，调用方自己用模拟值。 */
@@ -55,11 +57,15 @@ struct Geo {
     double lng = 0;
 };
 
-/** 地址转坐标。失败 ok=false。只用腾讯，不走 Nominatim。 */
+/** 地址转坐标。失败 ok=false。 */
 Geo geocode(const QString &address);
 
+/** 高德地理编码候选，用于地图选点页的异步地址搜索。 */
+QUrl amapGeocodeUrl(const QString &address);
+QJsonArray parseAmapGeocodes(const QJsonObject &obj);
+
 QUrl fallbackMapUrl(double lat, double lng, int zoom = 15);
-/** 国内瓦片：高德 → 腾讯，不走 OSM。 */
+/** 国内高德瓦片。 */
 QList<QUrl> rasterTileUrls(double lat, double lng, int zoom = 15);
 QList<QUrl> rasterTileUrlsXY(int tileX, int tileY, int zoom);
 int clampTileZoom(int zoom);
@@ -79,8 +85,6 @@ QUrl openMeteoUrl(double lat, double lng);
 Weather parseOpenMeteo(const QJsonObject &obj);
 QUrl osrmUrl(const QString &mode, double fromLat, double fromLng, double toLat, double toLng);
 bool parseOsrm(const QJsonObject &obj, double *meters, int *seconds);
-QUrl directionUrl(const QString &mode, double fromLat, double fromLng, double toLat, double toLng);
-bool parseDirection(const QJsonObject &obj, double *meters, int *seconds);
 QJsonObject getUrlJson(const QUrl &url, int timeoutMs = 4500);
 
 QUrl ipLocateUrl();
