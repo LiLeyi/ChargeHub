@@ -997,8 +997,8 @@ void UserWindow::tryWindowsLocate()
                     return;
                 }
                 if (locMatch_)
-                    locMatch_->setText(g.ok ? u8("系统定位精度不够，请在地图上点选您所在的位置。")
-                                            : u8("未拿到精确系统定位，请在地图上点选，或填写住址。"));
+                    locMatch_->setText(g.ok ? u8("系统定位精度不足，已使用默认参考点。可手动点击“地图选点”。")
+                                            : u8("未拿到系统定位，已使用默认参考点。可手动点击“地图选点”。"));
                 queryStations();
             });
     proc->start(exe, {QStringLiteral("-NoProfile"), QStringLiteral("-STA"),
@@ -1018,29 +1018,37 @@ void UserWindow::fetchLocationByIP()
         locMatch_->setText(u8("正在通过IP获取位置…"));
     }
 
-    QUrl url("http://ip-api.com/json/?fields=status,lat,lon,city,regionName&lang=zh-CN");
-    QNetworkRequest request(url);
-    request.setHeader(QNetworkRequest::UserAgentHeader, "ChargeHub/1.0");
-
-    auto *reply = mapNetwork_->get(request);
+    auto *reply = mapNetwork_->get(
+        TencentApi::request(TencentApi::signedUrl(QStringLiteral("/v3/ip"), {})));
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         if (reply->error() == QNetworkReply::NoError) {
             QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
             QJsonObject obj = doc.object();
-            if (obj.value("status").toString() == "success") {
-                double lat = obj.value("lat").toDouble();
-                double lng = obj.value("lon").toDouble();
+            if (obj.value("status").toString() == QLatin1String("1")) {
+                double lat = 0.0;
+                double lng = 0.0;
+                const QStringList bounds = obj.value("rectangle").toString().split(';');
+                if (bounds.size() == 2) {
+                    const QStringList southWest = bounds.at(0).split(',');
+                    const QStringList northEast = bounds.at(1).split(',');
+                    if (southWest.size() == 2 && northEast.size() == 2) {
+                        lng = (southWest.at(0).toDouble() + northEast.at(0).toDouble()) / 2.0;
+                        lat = (southWest.at(1).toDouble() + northEast.at(1).toDouble()) / 2.0;
+                    }
+                }
                 QString city = obj.value("city").toString();
-                QString region = obj.value("regionName").toString();
+                QString region = obj.value("province").toString();
 
                 if (lat != 0.0 || lng != 0.0) {
                     locLat_ = lat;
                     locLng_ = lng;
                     useGps_ = true;
-                    gpsPlace_ = region.isEmpty() ? city : (city.isEmpty() ? region : region + " " + city);
+                    gpsPlace_ = region.isEmpty() ? city
+                                                 : (city.isEmpty() || city == region ? region
+                                                                                     : region + " " + city);
 
                     if (locMatch_) {
-                        locMatch_->setText(u8("已通过IP定位：") + gpsPlace_);
+                        locMatch_->setText(u8("已通过高德 IP 定位到城市参考点：") + gpsPlace_);
                     }
                     // 自动查找附近电站
                     queryStations();
@@ -1059,6 +1067,8 @@ void UserWindow::fetchLocationByIP()
                 locMatch_->setText(u8("IP定位请求失败，请填写住址查找"));
             }
         }
+        if (!useGps_)
+            queryStations();
         reply->deleteLater();
     });
 }
