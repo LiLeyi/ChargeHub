@@ -155,6 +155,16 @@ QUrl TencentApi::staticMapUrl(double lat, double lng)
                       {QStringLiteral("markers"), marker}});
 }
 
+QUrl TencentApi::pickerMapUrl(double lat, double lng, int zoom)
+{
+    zoom = qBound(3, zoom, 18);
+    const QString center = QString::number(lng, 'f', 6) + "," + QString::number(lat, 'f', 6);
+    return signedUrl(QStringLiteral("/v3/staticmap"),
+                     {{QStringLiteral("location"), center},
+                      {QStringLiteral("zoom"), QString::number(zoom)},
+                      {QStringLiteral("size"), QStringLiteral("640*480")}});
+}
+
 QUrl TencentApi::weatherAdcodeUrl(double lat, double lng)
 {
     const QString loc = QString::number(lng, 'f', 6) + "," + QString::number(lat, 'f', 6);
@@ -238,6 +248,27 @@ void TencentApi::tilePixelToLatLng(int tileX, int tileY, int zoom, double px, do
     *lng = fx * 360.0 - 180.0;
     const double latRad = std::atan(std::sinh(3.14159265358979323846 * (1.0 - 2.0 * fy)));
     *lat = latRad * 180.0 / 3.14159265358979323846;
+}
+
+void TencentApi::centeredMapPixelToLatLng(double centerLat, double centerLng, int zoom,
+                                          double px, double py, int width, int height,
+                                          double *lat, double *lng)
+{
+    if (!lat || !lng || width <= 0 || height <= 0)
+        return;
+    zoom = qBound(0, zoom, 20);
+    const double world = 256.0 * static_cast<double>(1 << zoom);
+    const double centerX = (centerLng + 180.0) / 360.0 * world;
+    const double centerRad = centerLat * 3.14159265358979323846 / 180.0;
+    const double centerY = (1.0 - std::log(std::tan(centerRad)
+                                          + 1.0 / std::cos(centerRad))
+                                  / 3.14159265358979323846)
+                           / 2.0 * world;
+    const double worldX = centerX + px - width / 2.0;
+    const double worldY = centerY + py - height / 2.0;
+    *lng = worldX / world * 360.0 - 180.0;
+    const double mercator = 3.14159265358979323846 * (1.0 - 2.0 * worldY / world);
+    *lat = std::atan(std::sinh(mercator)) * 180.0 / 3.14159265358979323846;
 }
 
 QUrl TencentApi::fallbackMapUrl(double lat, double lng, int zoom)

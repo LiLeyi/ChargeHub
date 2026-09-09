@@ -32,6 +32,7 @@ QJsonObject getJson(const QString &path, const QList<QPair<QString, QString>> &p
                     int timeoutMs = 4500);
 
 QUrl staticMapUrl(double lat, double lng);
+QUrl pickerMapUrl(double lat, double lng, int zoom);
 
 struct Weather {
     bool ok = false;
@@ -64,6 +65,9 @@ QUrl fallbackMapUrl(double lat, double lng, int zoom = 15);
 void mapTile(double lat, double lng, int zoom, int *x, int *y);
 void tilePixelToLatLng(int tileX, int tileY, int zoom, double px, double py, int tilePx,
                        double *lat, double *lng);
+void centeredMapPixelToLatLng(double centerLat, double centerLng, int zoom,
+                              double px, double py, int width, int height,
+                              double *lat, double *lng);
 QUrl openMeteoUrl(double lat, double lng);
 Weather parseOpenMeteo(const QJsonObject &obj);
 QUrl osrmUrl(const QString &mode, double fromLat, double fromLng, double toLat, double toLng);

@@ -1121,16 +1121,20 @@ bool UserWindow::pickMyLocation()
 
     double pickLat = locLat_;
     double pickLng = locLng_;
+    double mapCenterLat = pickLat;
+    double mapCenterLng = pickLng;
     int zoom = 16;
-    int tileX = 0, tileY = 0;
     bool picked = false;
 
-    auto loadMap = [this, map, status, &pickLat, &pickLng, &zoom, &tileX, &tileY]() {
+    auto loadMap = [this, map, status, &pickLat, &pickLng,
+                    &mapCenterLat, &mapCenterLng, &zoom]() {
         if (!mapNetwork_ || !map)
             return;
-        TencentApi::mapTile(pickLat, pickLng, zoom, &tileX, &tileY);
+        mapCenterLat = pickLat;
+        mapCenterLng = pickLng;
         map->setText(u8("正在加载地图…"));
-        auto *reply = mapNetwork_->get(TencentApi::request(TencentApi::fallbackMapUrl(pickLat, pickLng, zoom)));
+        auto *reply = mapNetwork_->get(
+            TencentApi::request(TencentApi::pickerMapUrl(pickLat, pickLng, zoom)));
         const QPointer<MapPickLabel> guard(map);
         connect(reply, &QNetworkReply::finished, this, [reply, guard, status] {
             if (guard) {
@@ -1146,7 +1150,8 @@ bool UserWindow::pickMyLocation()
         });
     };
 
-    map->onClick = [map, status, &pickLat, &pickLng, &zoom, &tileX, &tileY, &picked](QPoint pos) {
+    map->onClick = [map, status, &pickLat, &pickLng,
+                    &mapCenterLat, &mapCenterLng, &zoom, &picked](QPoint pos) {
         const QPixmap pm = map->pixmap(Qt::ReturnByValue);
         if (pm.isNull() || pm.width() <= 0)
             return;
@@ -1156,7 +1161,9 @@ bool UserWindow::pickMyLocation()
         const double py = pos.y() - y0;
         if (px < 0 || py >= pm.height() || py < 0 || px >= pm.width())
             return;
-        TencentApi::tilePixelToLatLng(tileX, tileY, zoom, px, py, pm.width(), &pickLat, &pickLng);
+        TencentApi::centeredMapPixelToLatLng(mapCenterLat, mapCenterLng, zoom,
+                                             px, py, pm.width(), pm.height(),
+                                             &pickLat, &pickLng);
         picked = validCoordinate(pickLat, pickLng);
         if (picked && status)
             status->setText(u8("已选点：%1, %2  可再点一次微调，或点确定。")
