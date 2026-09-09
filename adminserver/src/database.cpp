@@ -523,25 +523,6 @@ int Database::execute(const QString &sql, const QVariantList &args)
     return q.lastInsertId().toInt();
 }
 
-/** 加锁执行写语句；成功返回实际影响行数，失败 -1 并记下 lastError_。 */
-qint64 Database::executeAffected(const QString &sql, const QVariantList &args)
-{
-    QMutexLocker locker(&mutex_);
-    QSqlQuery q(conn());
-    if (!q.prepare(sql)) {
-        lastError_ = q.lastError().text();
-        return -1;
-    }
-    for (const QVariant &a : args)
-        q.addBindValue(a);
-    if (!q.exec()) {
-        lastError_ = q.lastError().text();
-        return -1;
-    }
-    lastError_.clear();
-    return q.numRowsAffected();
-}
-
 /** fn 返回 true 才 COMMIT，否则 ROLLBACK。开充/停充/结算/充值都走这里。 */
 bool Database::transaction(const std::function<bool()> &fn)
 {

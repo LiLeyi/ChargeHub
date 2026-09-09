@@ -29,41 +29,36 @@
 #include <QJsonDocument>
 #include <QListView>
 #include <QComboBox>
+#include <QColor>
+#include <QFont>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPen>
 #include <QPixmap>
 #include <QPlainTextEdit>
 #include <QPointer>
+#include <QEvent>
 #include <QFileInfo>
 #include <QMouseEvent>
+#include <QPaintEvent>
+#include <QWheelEvent>
 #include <QProcess>
 #include <QSizePolicy>
 #include <QStatusBar>
 #include <QStringList>
 #include <QStyle>
 #include <QTextCursor>
-#include <QtMath>
+#include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
-#include <QTimer>
 #include <QSettings>
-#include <QtMath>
+#include <QSize>
+#include <memory>
 
 static QString u8(const char *s) { return QString::fromUtf8(s); }
-
-// 计算两点间距离（公里）
-static double haversine(double lat1, double lng1, double lat2, double lng2)
-{
-    const double r = 6371.0;
-    const double p1 = qDegreesToRadians(lat1);
-    const double p2 = qDegreesToRadians(lat2);
-    const double dphi = qDegreesToRadians(lat2 - lat1);
-    const double dl = qDegreesToRadians(lng2 - lng1);
-    const double a = qSin(dphi / 2) * qSin(dphi / 2)
-        + qCos(p1) * qCos(p2) * qSin(dl / 2) * qSin(dl / 2);
-    return r * 2 * qAtan2(qSqrt(a), qSqrt(1 - a));
-}
 
 namespace {
 
@@ -97,23 +92,30 @@ QUrl amapNavigationUrl(const QJsonObject &station, const QJsonObject &origin, co
     return url;
 }
 
-/** OSM 路线页：参数是 lat,lng;lat,lng。 */
-QUrl osmDirectionsUrl(const QJsonObject &station, const QJsonObject &origin, const QString &mode)
+/** 腾讯地图网页路线（国内可打开）。type=drive/walk/bike/bus */
+QUrl tencentRoutePlanUrl(const QJsonObject &station, const QJsonObject &origin, const QString &mode)
 {
-    QString engine = QStringLiteral("fossgis_osrm_car");
+    QString type = QStringLiteral("drive");
     if (mode == QStringLiteral("walk"))
-        engine = QStringLiteral("fossgis_osrm_foot");
+        type = QStringLiteral("walk");
     else if (mode == QStringLiteral("bike"))
-        engine = QStringLiteral("fossgis_osrm_bike");
-    const QString route = QStringLiteral("%1,%2;%3,%4")
-                              .arg(origin.value("lat").toDouble(), 0, 'f', 6)
-                              .arg(origin.value("lng").toDouble(), 0, 'f', 6)
-                              .arg(station.value("lat").toDouble(), 0, 'f', 6)
-                              .arg(station.value("lng").toDouble(), 0, 'f', 6);
-    QUrl url(QStringLiteral("https://www.openstreetmap.org/directions"));
+        type = QStringLiteral("bike");
+    else if (mode == QStringLiteral("bus"))
+        type = QStringLiteral("bus");
+    QUrl url(QStringLiteral("https://apis.map.qq.com/uri/v1/routeplan"));
     QUrlQuery query;
-    query.addQueryItem(QStringLiteral("engine"), engine);
-    query.addQueryItem(QStringLiteral("route"), route);
+    query.addQueryItem(QStringLiteral("type"), type);
+    query.addQueryItem(QStringLiteral("from"), u8("我的位置"));
+    query.addQueryItem(QStringLiteral("fromcoord"),
+                       QStringLiteral("%1,%2")
+                           .arg(origin.value("lat").toDouble(), 0, 'f', 6)
+                           .arg(origin.value("lng").toDouble(), 0, 'f', 6));
+    query.addQueryItem(QStringLiteral("to"), station.value("name").toString());
+    query.addQueryItem(QStringLiteral("tocoord"),
+                       QStringLiteral("%1,%2")
+                           .arg(station.value("lat").toDouble(), 0, 'f', 6)
+                           .arg(station.value("lng").toDouble(), 0, 'f', 6));
+    query.addQueryItem(QStringLiteral("referer"), QStringLiteral("ChargeHub"));
     url.setQuery(query);
     return url;
 }
@@ -157,19 +159,290 @@ bool validCoordinate(double lat, double lng)
            && (qAbs(lat) > 1e-9 || qAbs(lng) > 1e-9);
 }
 
-/** 地图选点：点一下把像素换成经纬度。 */
-class MapPickLabel : public QLabel {
+void paintPin(QPainter *p, const QPointF &pt, const QColor &color, const QString &label)
+{
+    p->setBrush(color);
+    p->setPen(QPen(Qt::white, 2));
+    p->drawEllipse(pt, 9, 9);
+    p->setPen(QColor("#0F172A"));
+    QFont f = p->font();
+    f.setPixelSize(12);
+    f.setBold(true);
+    p->setFont(f);
+    p->drawText(QRectF(pt.x() + 12, pt.y() - 16, 72, 20), Qt::AlignLeft | Qt::AlignVCenter, label);
+}
+
+struct MapPin {
+    double lat = 0;
+    double lng = 0;
+    QColor color;
+    QString label;
+};
+
+/** 可拖拽、滚轮缩放的瓦片图。红蓝点按经纬度叠在图上，不被裁切掉。 */
+class PanMapLabel : public QLabel {
 public:
-    explicit MapPickLabel(QWidget *parent = nullptr) : QLabel(parent) {}
-    std::function<void(QPoint)> onClick;
+    explicit PanMapLabel(QWidget *parent = nullptr) : QLabel(parent)
+    {
+        setCursor(Qt::OpenHandCursor);
+        setScaledContents(false);
+        setAlignment(Qt::AlignCenter);
+        setFocusPolicy(Qt::WheelFocus);
+        setMouseTracking(true);
+        reloadTimer_ = new QTimer(this);
+        reloadTimer_->setSingleShot(true);
+        reloadTimer_->setInterval(120);
+        connect(reloadTimer_, &QTimer::timeout, this, [this] {
+            if (onViewChanged)
+                onViewChanged();
+        });
+    }
+
+    std::function<void()> onViewChanged;
+    std::function<void(double, double)> onTapGeo;
+
+    double viewLat() const { return viewLat_; }
+    double viewLng() const { return viewLng_; }
+    int zoom() const { return zoom_; }
+
+    void setView(double lat, double lng, int z)
+    {
+        viewLat_ = lat;
+        viewLng_ = lng;
+        zoom_ = TencentApi::clampTileZoom(z);
+        dragOffset_ = QPoint();
+        update();
+    }
+
+    void setPins(const QVector<MapPin> &pins)
+    {
+        pins_ = pins;
+        update();
+    }
+
+    void setMosaic(const QPixmap &pm, int originTileX, int originTileY, int tilePx, int mosaicZoom)
+    {
+        mosaic_ = pm;
+        originTileX_ = originTileX;
+        originTileY_ = originTileY;
+        tilePx_ = tilePx > 0 ? tilePx : 256;
+        mosaicZoom_ = TencentApi::clampTileZoom(mosaicZoom);
+        dragOffset_ = QPoint();
+        setText(QString());
+        update();
+    }
+
+    void nudgeZoom(int dir)
+    {
+        applyZoom(dir, QPoint(width() / 2, height() / 2));
+    }
+
 protected:
     void mousePressEvent(QMouseEvent *ev) override
     {
-        if (onClick)
-            onClick(ev->pos());
+        if (ev->button() == Qt::LeftButton) {
+            pressPos_ = ev->pos();
+            dragOffset_ = QPoint();
+            dragging_ = true;
+            moved_ = false;
+            setCursor(Qt::ClosedHandCursor);
+        }
         QLabel::mousePressEvent(ev);
     }
+    void mouseMoveEvent(QMouseEvent *ev) override
+    {
+        if (dragging_ && (ev->buttons() & Qt::LeftButton)) {
+            dragOffset_ = ev->pos() - pressPos_;
+            if (dragOffset_.manhattanLength() > 8)
+                moved_ = true;
+            update();
+        }
+        QLabel::mouseMoveEvent(ev);
+    }
+    void mouseReleaseEvent(QMouseEvent *ev) override
+    {
+        if (dragging_ && ev->button() == Qt::LeftButton) {
+            dragging_ = false;
+            setCursor(Qt::OpenHandCursor);
+            const QPoint off = dragOffset_;
+            dragOffset_ = QPoint();
+            if (moved_) {
+                panBy(off.x(), off.y());
+                requestReload();
+            } else if (onTapGeo) {
+                double lat = 0, lng = 0;
+                widgetToLatLng(ev->pos(), &lat, &lng);
+                onTapGeo(lat, lng);
+            } else {
+                update();
+            }
+        }
+        QLabel::mouseReleaseEvent(ev);
+    }
+    void wheelEvent(QWheelEvent *ev) override
+    {
+        int dy = ev->angleDelta().y();
+        if (dy == 0)
+            dy = ev->pixelDelta().y();
+        if (dy == 0) {
+            ev->accept();
+            return;
+        }
+        wheelAcc_ += dy;
+        if (qAbs(wheelAcc_) < 40) {
+            ev->accept();
+            return;
+        }
+        const int dir = wheelAcc_ > 0 ? 1 : -1;
+        wheelAcc_ = 0;
+#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
+        applyZoom(dir, ev->position().toPoint());
+#else
+        applyZoom(dir, ev->pos());
+#endif
+        ev->accept();
+    }
+    bool event(QEvent *e) override
+    {
+        if (e->type() == QEvent::Wheel) {
+            wheelEvent(static_cast<QWheelEvent *>(e));
+            return true;
+        }
+        return QLabel::event(e);
+    }
+    void paintEvent(QPaintEvent *ev) override
+    {
+        Q_UNUSED(ev);
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setRenderHint(QPainter::SmoothPixmapTransform);
+        QPainterPath clip;
+        clip.addRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 12, 12);
+        p.setClipPath(clip);
+        p.fillRect(rect(), QColor("#F8FAFC"));
+
+        const int paintZ = mosaic_.isNull() ? zoom_ : mosaicZoom_;
+        double vx = 0, vy = 0;
+        TencentApi::latLngToWorldPixel(viewLat_, viewLng_, paintZ, &vx, &vy);
+        const double scale = baseSpp() * zoomFactor(zoom_ - paintZ);
+        if (!mosaic_.isNull() && mosaic_.width() > 0) {
+            const double imgScale = scale * (256.0 / tilePx_);
+            const double x = width() / 2.0 + (originTileX_ * 256.0 - vx) * scale + dragOffset_.x();
+            const double y = height() / 2.0 + (originTileY_ * 256.0 - vy) * scale + dragOffset_.y();
+            p.drawPixmap(QRectF(x, y, mosaic_.width() * imgScale, mosaic_.height() * imgScale),
+                         mosaic_, mosaic_.rect());
+        } else if (!text().isEmpty()) {
+            p.setPen(QColor("#64748B"));
+            p.drawText(rect(), Qt::AlignCenter, text());
+        }
+        for (const MapPin &pin : pins_) {
+            const QPointF pt = latLngToWidget(pin.lat, pin.lng);
+            if (rect().adjusted(-24, -24, 24, 24).contains(pt.toPoint()))
+                paintPin(&p, pt, pin.color, pin.label);
+        }
+        p.setClipping(false);
+        p.setPen(QPen(QColor("#E2E8F0"), 1));
+        p.setBrush(Qt::NoBrush);
+        p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 12, 12);
+    }
+
+private:
+    static double zoomFactor(int delta)
+    {
+        if (delta == 0)
+            return 1.0;
+        if (delta > 0)
+            return static_cast<double>(1 << qMin(delta, 8));
+        return 1.0 / static_cast<double>(1 << qMin(-delta, 8));
+    }
+    double baseSpp() const
+    {
+        if (width() <= 0 || height() <= 0)
+            return 1.0;
+        return qMax(width() / 256.0, height() / 256.0);
+    }
+    QPointF latLngToWidget(double lat, double lng) const
+    {
+        double vx = 0, vy = 0, px = 0, py = 0;
+        TencentApi::latLngToWorldPixel(viewLat_, viewLng_, zoom_, &vx, &vy);
+        TencentApi::latLngToWorldPixel(lat, lng, zoom_, &px, &py);
+        const double scale = baseSpp();
+        return QPointF(width() / 2.0 + (px - vx) * scale + dragOffset_.x(),
+                       height() / 2.0 + (py - vy) * scale + dragOffset_.y());
+    }
+    void widgetToLatLng(QPoint pos, double *lat, double *lng) const
+    {
+        double vx = 0, vy = 0;
+        TencentApi::latLngToWorldPixel(viewLat_, viewLng_, zoom_, &vx, &vy);
+        const double scale = baseSpp();
+        const double wx = vx + (pos.x() - width() / 2.0 - dragOffset_.x()) / scale;
+        const double wy = vy + (pos.y() - height() / 2.0 - dragOffset_.y()) / scale;
+        TencentApi::worldPixelToLatLng(wx, wy, zoom_, lat, lng);
+    }
+    void panBy(int dx, int dy)
+    {
+        double vx = 0, vy = 0;
+        TencentApi::latLngToWorldPixel(viewLat_, viewLng_, zoom_, &vx, &vy);
+        const double scale = baseSpp();
+        if (scale <= 0)
+            return;
+        TencentApi::worldPixelToLatLng(vx - dx / scale, vy - dy / scale, zoom_, &viewLat_, &viewLng_);
+    }
+    void applyZoom(int dir, QPoint cursor)
+    {
+        double holdLat = viewLat_, holdLng = viewLng_;
+        widgetToLatLng(cursor, &holdLat, &holdLng);
+        const int next = TencentApi::clampTileZoom(zoom_ + dir);
+        if (next == zoom_)
+            return;
+        zoom_ = next;
+        double hx = 0, hy = 0;
+        TencentApi::latLngToWorldPixel(holdLat, holdLng, zoom_, &hx, &hy);
+        const double scale = baseSpp();
+        const double vx = hx - (cursor.x() - width() / 2.0 - dragOffset_.x()) / scale;
+        const double vy = hy - (cursor.y() - height() / 2.0 - dragOffset_.y()) / scale;
+        TencentApi::worldPixelToLatLng(vx, vy, zoom_, &viewLat_, &viewLng_);
+        update();
+        requestReload();
+    }
+    void requestReload()
+    {
+        if (reloadTimer_)
+            reloadTimer_->start();
+    }
+
+    double viewLat_ = 39.9644;
+    double viewLng_ = 116.3473;
+    int zoom_ = 15;
+    QVector<MapPin> pins_;
+    QPixmap mosaic_;
+    int originTileX_ = 0;
+    int originTileY_ = 0;
+    int tilePx_ = 256;
+    int mosaicZoom_ = 15;
+    QPoint pressPos_;
+    QPoint dragOffset_;
+    bool dragging_ = false;
+    bool moved_ = false;
+    int wheelAcc_ = 0;
+    QTimer *reloadTimer_ = nullptr;
 };
+
+int fitZoomForWidget(double lat1, double lng1, double lat2, double lng2, const QSize &box)
+{
+    const int w = qMax(box.width(), 280);
+    const int h = qMax(box.height(), 200);
+    const int margin = 48;
+    for (int z = 17; z >= 3; --z) {
+        double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+        TencentApi::latLngToWorldPixel(lat1, lng1, z, &x1, &y1);
+        TencentApi::latLngToWorldPixel(lat2, lng2, z, &x2, &y2);
+        const double spp = qMax(w / 256.0, h / 256.0);
+        if (qAbs(x1 - x2) * spp < w - 2 * margin && qAbs(y1 - y2) * spp < h - 2 * margin)
+            return z;
+    }
+    return 10;
+}
 
 QString windowsLocateScript()
 {
@@ -185,6 +458,97 @@ QString windowsLocateScript()
         "$ci=[Globalization.CultureInfo]::InvariantCulture; "
         "Write-Output ('OK {0} {1} {2}' -f $c.Latitude.ToString($ci),$c.Longitude.ToString($ci),"
         "$c.HorizontalAccuracy.ToString($ci))");
+}
+
+void fetchFirstPixmap(QNetworkAccessManager *nam, QObject *ctx, const QList<QUrl> &urls,
+                      const std::function<void(QPixmap)> &done)
+{
+    if (!nam || !ctx) {
+        if (done)
+            done(QPixmap());
+        return;
+    }
+    auto tryAt = std::make_shared<std::function<void(int)>>();
+    *tryAt = [nam, ctx, urls, done, tryAt](int i) {
+        if (i >= urls.size()) {
+            if (done)
+                done(QPixmap());
+            return;
+        }
+        auto *reply = nam->get(TencentApi::request(urls.at(i)));
+        QTimer::singleShot(7000, reply, [reply] {
+            if (reply && !reply->isFinished())
+                reply->abort();
+        });
+        QObject::connect(reply, &QNetworkReply::finished, ctx, [reply, i, tryAt, done] {
+            QPixmap pix;
+            const QByteArray raw = reply->readAll();
+            const bool ok = reply->error() == QNetworkReply::NoError && pix.loadFromData(raw)
+                            && pix.width() >= 32;
+            reply->deleteLater();
+            if (ok) {
+                if (done)
+                    done(pix);
+            } else {
+                (*tryAt)(i + 1);
+            }
+        });
+    };
+    (*tryAt)(0);
+}
+
+void fetchTileGrid(QNetworkAccessManager *nam, QObject *ctx, double lat, double lng, int zoom,
+                   const std::function<void(QPixmap, int, int, int)> &done)
+{
+    zoom = TencentApi::clampTileZoom(zoom);
+    int cx = 0, cy = 0;
+    TencentApi::mapTile(lat, lng, zoom, &cx, &cy);
+    const int radius = 1;
+    const int dim = radius * 2 + 1;
+    const int originX = cx - radius;
+    const int originY = cy - radius;
+    auto cells = std::make_shared<QVector<QPixmap>>(dim * dim);
+    auto left = std::make_shared<int>(dim * dim);
+    auto finished = std::make_shared<bool>(false);
+    auto stitch = [done, cells, finished, originX, originY, dim]() {
+        if (*finished)
+            return;
+        *finished = true;
+        int tilePx = 256;
+        for (const QPixmap &pm : *cells) {
+            if (!pm.isNull() && pm.width() >= 32) {
+                tilePx = pm.width();
+                break;
+            }
+        }
+        QPixmap mosaic(tilePx * dim, tilePx * dim);
+        mosaic.fill(QColor("#F1F5F9"));
+        QPainter p(&mosaic);
+        bool any = false;
+        for (int row = 0; row < dim; ++row) {
+            for (int col = 0; col < dim; ++col) {
+                const QPixmap &pm = cells->at(row * dim + col);
+                if (pm.isNull())
+                    continue;
+                any = true;
+                p.drawPixmap(QRect(col * tilePx, row * tilePx, tilePx, tilePx),
+                             pm.scaled(tilePx, tilePx, Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+            }
+        }
+        if (done)
+            done(any ? mosaic : QPixmap(), originX, originY, tilePx);
+    };
+    for (int row = 0; row < dim; ++row) {
+        for (int col = 0; col < dim; ++col) {
+            const int idx = row * dim + col;
+            fetchFirstPixmap(nam, ctx, TencentApi::rasterTileUrlsXY(originX + col, originY + row, zoom),
+                             [cells, left, stitch, idx](const QPixmap &pix) {
+                                 (*cells)[idx] = pix;
+                                 if (--(*left) <= 0)
+                                     stitch();
+                             });
+        }
+    }
 }
 
 } // namespace
@@ -250,11 +614,10 @@ UserWindow::UserWindow(QWidget *parent) : QMainWindow(parent)
 
     connect(&controller_, &UserController::connected, this, [this] {
         loginPage_->setStatus(u8("已连接运营平台"));
-        statusBar()->showMessage(u8("已连接服务器"));
-        // 连接成功后尝试自动登录（如果还没有认证）
-        if (!controller_.isAuthenticated() && !isAutoLoginAttempt_) {
+        statusBar()->showMessage(u8("已连接  ") + loginPage_->serverHost() + ":"
+                                 + QString::number(loginPage_->serverPort()));
+        if (!controller_.isAuthenticated())
             tryAutoLogin();
-        }
     });
     connect(&controller_, &UserController::failed, this, [this](const QString &m) {
         loginPage_->setStatus(m);
@@ -265,23 +628,8 @@ UserWindow::UserWindow(QWidget *parent) : QMainWindow(parent)
         uiWarn(this, u8("无法开始充电"), u8("您有未完成的充电订单，请先结算"));
         showCharge(order);
     });
-    connect(&controller_, &UserController::sessionExpired, this, &UserWindow::onSessionExpired);
-    connect(&controller_, &UserController::accountBlocked, this, &UserWindow::onAccountBlocked);
-
-    // 状态栏显示连接状态
-    statusBar()->showMessage(u8("正在连接服务器..."));
-
-    // 自动连接（使用固定地址）
-    QSettings settings(QStringLiteral("ChargeHub"), QStringLiteral("UserClient"));
-    QString server = settings.value(QStringLiteral("server"), QStringLiteral("127.0.0.1:8888")).toString();
-    QString host = server.section(':', 0, -2);
-    quint16 port = server.section(':', -1).toUShort();
-    if (port == 0) port = 8888;
-
-    // 延迟一点自动连接，让界面先显示
-    QTimer::singleShot(500, this, [this, host, port]() {
-        controller_.connectTo(host, port);
-    });
+    statusBar()->hide();
+    reconnect();
 }
 
 /** 清空动态卡片列表，避免刷新时叠一层。 */
@@ -300,80 +648,25 @@ QWidget *UserWindow::buildLogin()
 {
     loginPage_ = new LoginPage;
     connect(loginPage_, &LoginPage::connectRequested, this, &UserWindow::reconnect);
+    QString savedPhone, savedPassword;
+    if (controller_.isAutoLoginValid() && controller_.loadCredentials(savedPhone, savedPassword)) {
+        loginPage_->setLoginAccount(savedPhone, savedPassword);
+        loginPage_->setRememberMeChecked(true);
+    }
     connect(loginPage_, &LoginPage::authenticationRequested, this,
             [this](const QString &type, const QString &phone, const QString &password) {
-        // 保存登录凭证（如果勾选了"记住我"）
-        if (type == QStringLiteral("LOGIN") && loginPage_->isRememberMeChecked()) {
+        autoLoginAttempt_ = false;
+        if (type == QStringLiteral("LOGIN") && loginPage_->isRememberMeChecked())
             controller_.saveCredentials(phone, password);
-        }
+        else if (type == QStringLiteral("LOGIN"))
+            controller_.clearCredentials();
         controller_.authenticate(type, phone, password);
         if (!controller_.isConnected()) {
             loginPage_->setStatus(u8("尚未连接，正在连接服务器…"));
             reconnect();
         }
     });
-    connect(loginPage_, &LoginPage::switchToRegister, this, [this]() {
-        loginPage_->setStatus(QString());
-    });
-    connect(loginPage_, &LoginPage::switchToLogin, this, [this]() {
-        loginPage_->setStatus(QString());
-    });
     return loginPage_;
-}
-
-void UserWindow::tryAutoLogin()
-{
-    if (isAutoLoginAttempt_)
-        return;
-    if (!controller_.isConnected())
-        return;
-
-    QString phone, password;
-    if (controller_.isAutoLoginValid() && controller_.loadCredentials(phone, password)) {
-        isAutoLoginAttempt_ = true;
-        loginPage_->setStatus(u8("正在自动登录…"));
-        controller_.authenticate(QStringLiteral("LOGIN"), phone, password);
-    } else {
-        // 自动登录无效，清除过期凭证
-        controller_.clearCredentials();
-    }
-}
-
-void UserWindow::onAutoLoginFailed()
-{
-    isAutoLoginAttempt_ = false;
-    controller_.clearCredentials();
-    loginPage_->setStatus(u8("自动登录失败，请手动登录"));
-    loginPage_->clearPassword();
-    root_->setCurrentIndex(0);
-}
-
-void UserWindow::onSessionExpired()
-{
-    isAutoLoginAttempt_ = false;
-    // 保留手机号，清空密码
-    loginPage_->clearPassword();
-    loginPage_->setStatus(u8("会话已过期，请重新登录"));
-    root_->setCurrentIndex(0);
-    statusBar()->showMessage(u8("会话已过期，请重新登录"));
-}
-
-void UserWindow::onAccountBlocked(const QString &message)
-{
-    isAutoLoginAttempt_ = false;
-    controller_.clearCredentials();
-    loginPage_->clearPassword();
-
-    QString displayMsg = message;
-    if (message.contains(u8("冻结"))) {
-        displayMsg = u8("账号已被冻结，请联系管理员解冻。");
-    } else if (message.contains(u8("注销"))) {
-        displayMsg = u8("账号已注销，无法登录。");
-    }
-    uiError(this, u8("登录失败"), displayMsg);
-    loginPage_->setStatus(displayMsg);
-    root_->setCurrentIndex(0);
-    statusBar()->showMessage(u8("登录失败，账号已被封禁或冻结"));
 }
 
 /** 主壳：顶栏 + 内容 + 底部 Tab。页下标映射不变。 */
@@ -892,7 +1185,9 @@ QWidget *UserWindow::buildMe()
     connect(logout, &QPushButton::clicked, this, [this] {
         controller_.signOut();
         controller_.clearCredentials();
-        isAutoLoginAttempt_ = false;
+        autoLoginAttempt_ = false;
+        if (loginPage_)
+            loginPage_->setRememberMeChecked(false);
         root_->setCurrentIndex(0);
         loginPage_->setStatus(u8("已安全退出，请重新登录"));
         statusBar()->showMessage(u8("已退出登录"));
@@ -914,14 +1209,28 @@ QWidget *UserWindow::buildMe()
 /** 按登录页地址重新拨号。 */
 void UserWindow::reconnect()
 {
-    // 使用固定地址
-    QString host = QStringLiteral("127.0.0.1");
-    quint16 port = 8888;
-
+    const QString host = loginPage_->serverHost();
+    const quint16 port = loginPage_->serverPort();
     QSettings ini(QStringLiteral("ChargeHub"), QStringLiteral("UserClient"));
-    ini.setValue("server", QStringLiteral("127.0.0.1:8888"));
+    ini.setValue("server", loginPage_->serverAddress());
     loginPage_->setStatus(u8("正在连接 ") + host + ":" + QString::number(port) + u8(" …"));
     controller_.connectTo(host, port);
+}
+
+void UserWindow::tryAutoLogin()
+{
+    if (autoLoginAttempt_ || controller_.isAuthenticated())
+        return;
+    QString phone, password;
+    if (!controller_.isAutoLoginValid() || !controller_.loadCredentials(phone, password))
+        return;
+    autoLoginAttempt_ = true;
+    if (loginPage_) {
+        loginPage_->setLoginAccount(phone, password);
+        loginPage_->setRememberMeChecked(true);
+        loginPage_->setStatus(u8("正在自动登录…"));
+    }
+    controller_.authenticate(QStringLiteral("LOGIN"), phone, password);
 }
 
 /** 当前定位，给找站和导航。 */
@@ -935,14 +1244,6 @@ void UserWindow::queryStations()
 {
     if (!controller_.isAuthenticated())
         return;
-
-    // 如果还没有位置信息且未尝试过IP定位，尝试IP定位
-    if (!useGps_ && !hasLocationFromIP_ &&
-        locLat_ == 39.9644 && locLng_ == 116.3473) {
-        fetchLocationByIP();
-        return;
-    }
-
     QJsonObject data = coord();
     const double radii[] = {3, 5, 10, 20};
     data["radiusKm"] = radii[qBound(0, radius_ ? radius_->currentIndex() : 3, 3)];
@@ -968,7 +1269,6 @@ void UserWindow::applyUser(const QJsonObject &u)
         addrEdit_->setText(u.value("address").toString());
     refreshMe();
 }
-
 /** 登录成功切到主壳，先问位置授权再找桩。 */
 void UserWindow::showShell()
 {
@@ -1007,15 +1307,9 @@ void UserWindow::startLocate()
         queryStations();
         return;
     }
-#ifdef Q_OS_WIN
     if (locMatch_)
         locMatch_->setText(u8("正在通过 Windows 定位服务获取位置…"));
     tryWindowsLocate();
-#else
-    if (locMatch_)
-        locMatch_->setText(u8("正在通过 IP 获取虚拟机的大致位置…"));
-    fetchLocationByIP();
-#endif
 }
 
 void UserWindow::applyGpsFix(double lat, double lng, const QString &place)
@@ -1034,14 +1328,6 @@ void UserWindow::tryWindowsLocate()
         exe = QStringLiteral("powershell.exe");
     auto *proc = new QProcess(this);
     proc->setProcessChannelMode(QProcess::MergedChannels);
-    connect(proc, &QProcess::errorOccurred, this, [this, proc](QProcess::ProcessError error) {
-        if (error != QProcess::FailedToStart)
-            return;
-        if (locMatch_)
-            locMatch_->setText(u8("系统定位无法启动，已使用默认参考点。可手动点击“地图选点”。"));
-        proc->deleteLater();
-        queryStations();
-    });
     QTimer::singleShot(14000, proc, [proc] {
         if (proc->state() != QProcess::NotRunning)
             proc->kill();
@@ -1071,80 +1357,13 @@ void UserWindow::tryWindowsLocate()
                     return;
                 }
                 if (locMatch_)
-                    locMatch_->setText(g.ok ? u8("系统定位精度不足，已使用默认参考点。可手动点击“地图选点”。")
-                                            : u8("未拿到系统定位，已使用默认参考点。可手动点击“地图选点”。"));
-                queryStations();
+                    locMatch_->setText(g.ok ? u8("系统定位精度不够，请在地图上点选您所在的位置。")
+                                            : u8("未拿到精确系统定位，请在地图上点选，或填写住址。"));
+                pickMyLocation();
             });
     proc->start(exe, {QStringLiteral("-NoProfile"), QStringLiteral("-STA"),
                       QStringLiteral("-NonInteractive"), QStringLiteral("-Command"),
                       windowsLocateScript()});
-}
-
-/** 通过IP获取用户位置 */
-void UserWindow::fetchLocationByIP()
-{
-    if (!mapNetwork_) {
-        mapNetwork_ = new QNetworkAccessManager(this);
-    }
-
-    hasLocationFromIP_ = true;
-    if (locMatch_) {
-        locMatch_->setText(u8("正在通过IP获取位置…"));
-    }
-
-    auto *reply = mapNetwork_->get(
-        TencentApi::request(TencentApi::signedUrl(QStringLiteral("/v3/ip"), {})));
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        if (reply->error() == QNetworkReply::NoError) {
-            QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
-            QJsonObject obj = doc.object();
-            if (obj.value("status").toString() == QLatin1String("1")) {
-                double lat = 0.0;
-                double lng = 0.0;
-                const QStringList bounds = obj.value("rectangle").toString().split(';');
-                if (bounds.size() == 2) {
-                    const QStringList southWest = bounds.at(0).split(',');
-                    const QStringList northEast = bounds.at(1).split(',');
-                    if (southWest.size() == 2 && northEast.size() == 2) {
-                        lng = (southWest.at(0).toDouble() + northEast.at(0).toDouble()) / 2.0;
-                        lat = (southWest.at(1).toDouble() + northEast.at(1).toDouble()) / 2.0;
-                    }
-                }
-                QString city = obj.value("city").toString();
-                QString region = obj.value("province").toString();
-
-                if (lat != 0.0 || lng != 0.0) {
-                    locLat_ = lat;
-                    locLng_ = lng;
-                    useGps_ = true;
-                    gpsPlace_ = region.isEmpty() ? city
-                                                 : (city.isEmpty() || city == region ? region
-                                                                                     : region + " " + city);
-
-                    if (locMatch_) {
-                        locMatch_->setText(u8("已通过高德 IP 定位到城市参考点：") + gpsPlace_);
-                    }
-                    // 自动查找附近电站
-                    queryStations();
-                } else {
-                    if (locMatch_) {
-                        locMatch_->setText(u8("IP定位失败，请填写住址查找"));
-                    }
-                }
-            } else {
-                if (locMatch_) {
-                    locMatch_->setText(u8("IP定位服务不可用，请填写住址查找"));
-                }
-            }
-        } else {
-            if (locMatch_) {
-                locMatch_->setText(u8("IP定位请求失败，请填写住址查找"));
-            }
-        }
-        if (!useGps_)
-            queryStations();
-        reply->deleteLater();
-    });
 }
 
 bool UserWindow::pickMyLocation()
@@ -1172,122 +1391,92 @@ bool UserWindow::pickMyLocation()
     zoomOut->setObjectName("ghost");
     auto *zoomIn = new QPushButton(u8("放大"));
     zoomIn->setObjectName("ghost");
-    auto *zoomHint = new QLabel(u8("放大后点击更准"));
+    auto *zoomHint = new QLabel(u8("滚轮缩放，拖动查看，点击标定"));
     zoomHint->setObjectName("uiSheetHint");
     zoomRow->addWidget(zoomOut);
     zoomRow->addWidget(zoomIn);
     zoomRow->addWidget(zoomHint, 1);
     dialog.body()->addLayout(zoomRow);
 
-    auto *map = new MapPickLabel;
-    map->setAlignment(Qt::AlignCenter);
+    auto *map = new PanMapLabel;
     map->setMinimumSize(320, 280);
-    map->setCursor(Qt::CrossCursor);
     map->setStyleSheet(QStringLiteral(
         "background:#F8FAFC;border:1px solid #E2E8F0;border-radius:12px;color:#64748B;font-size:14px;"));
     map->setText(u8("正在加载地图…"));
+    map->setFocus();
     dialog.body()->addWidget(map, 1);
 
-    auto *status = new QLabel(u8("请点击地图上您所在的位置。"));
+    auto *status = new QLabel(u8("拖动地图、滚轮缩放，再点击标定您所在的位置。"));
     status->setObjectName("uiSheetHint");
     status->setWordWrap(true);
     dialog.body()->addWidget(status);
 
     double pickLat = locLat_;
     double pickLng = locLng_;
-    double mapCenterLat = pickLat;
-    double mapCenterLng = pickLng;
-    int zoom = 16;
+    int mapGen = 0;
     bool picked = false;
+    map->setView(locLat_, locLng_, 16);
 
-    auto loadMap = [this, map, status, &pickLat, &pickLng,
-                    &mapCenterLat, &mapCenterLng, &zoom]() {
-        if (!mapNetwork_ || !map)
-            return;
-        mapCenterLat = pickLat;
-        mapCenterLng = pickLng;
-        map->setText(u8("正在加载地图…"));
-        auto *reply = mapNetwork_->get(
-            TencentApi::request(TencentApi::pickerMapUrl(pickLat, pickLng, zoom)));
-        const QPointer<MapPickLabel> guard(map);
-        connect(reply, &QNetworkReply::finished, this, [reply, guard, status] {
-            if (guard) {
-                QPixmap pix;
-                if (reply->error() == QNetworkReply::NoError && pix.loadFromData(reply->readAll())) {
-                    guard->setPixmap(pix);
-                    guard->setText(QString());
-                } else if (status) {
-                    status->setText(u8("地图加载失败，仍可填写住址后点「定位到此处」。"));
-                }
-            }
-            reply->deleteLater();
-        });
+    auto refreshPickPin = [map, &picked, &pickLat, &pickLng]() {
+        if (picked && validCoordinate(pickLat, pickLng))
+            map->setPins({{pickLat, pickLng, QColor("#2563EB"), u8("我")}});
+        else
+            map->setPins({});
     };
 
-    map->onClick = [map, status, &pickLat, &pickLng,
-                    &mapCenterLat, &mapCenterLng, &zoom, &picked](QPoint pos) {
-        const QPixmap pm = map->pixmap(Qt::ReturnByValue);
-        if (pm.isNull() || pm.width() <= 0)
+    auto loadMap = [this, map, status, &mapGen, refreshPickPin]() {
+        if (!mapNetwork_ || !map)
             return;
-        const int x0 = (map->width() - pm.width()) / 2;
-        const int y0 = (map->height() - pm.height()) / 2;
-        const double px = pos.x() - x0;
-        const double py = pos.y() - y0;
-        if (px < 0 || py >= pm.height() || py < 0 || px >= pm.width())
-            return;
-        TencentApi::centeredMapPixelToLatLng(mapCenterLat, mapCenterLng, zoom,
-                                             px, py, pm.width(), pm.height(),
-                                             &pickLat, &pickLng);
+        refreshPickPin();
+        const int gen = ++mapGen;
+        const int z = map->zoom();
+        const QPointer<PanMapLabel> guard(map);
+        fetchTileGrid(mapNetwork_, this, map->viewLat(), map->viewLng(), z,
+                      [guard, status, gen, &mapGen, z](const QPixmap &pix, int ox, int oy, int tilePx) {
+                          if (!guard || gen != mapGen)
+                              return;
+                          if (!pix.isNull()) {
+                              guard->setMosaic(pix, ox, oy, tilePx, z);
+                          } else if (status) {
+                              status->setText(u8("在线地图暂时连不上。仍可填写住址后点「定位到此处」。"));
+                              guard->setText(u8("地图暂不可用，请用住址定位"));
+                          }
+                      });
+    };
+
+    map->onTapGeo = [status, &pickLat, &pickLng, &picked, refreshPickPin](double lat, double lng) {
+        pickLat = lat;
+        pickLng = lng;
         picked = validCoordinate(pickLat, pickLng);
+        refreshPickPin();
         if (picked && status)
-            status->setText(u8("已选点：%1, %2  可再点一次微调，或点确定。")
+            status->setText(u8("已选点：%1, %2  可拖动、滚轮缩放，或再点一次微调。")
                                 .arg(pickLat, 0, 'f', 5)
                                 .arg(pickLng, 0, 'f', 5));
     };
+    map->onViewChanged = loadMap;
 
-    connect(zoomIn, &QPushButton::clicked, this, [&zoom, loadMap] {
-        if (zoom < 18) {
-            ++zoom;
-            loadMap();
-        }
-    });
-    connect(zoomOut, &QPushButton::clicked, this, [&zoom, loadMap] {
-        if (zoom > 12) {
-            --zoom;
-            loadMap();
-        }
-    });
-    connect(goAddr, &QPushButton::clicked, this, [this, addr, status, &pickLat, &pickLng, &picked, loadMap] {
+    connect(zoomIn, &QPushButton::clicked, this, [map] { map->nudgeZoom(1); });
+    connect(zoomOut, &QPushButton::clicked, this, [map] { map->nudgeZoom(-1); });
+    connect(goAddr, &QPushButton::clicked, this, [this, addr, status, map, &pickLat, &pickLng, &picked,
+                                                  refreshPickPin, loadMap] {
         const QString text = addr->text().trimmed();
         if (text.isEmpty()) {
             status->setText(u8("请先填写住址或地标。"));
             return;
         }
         status->setText(u8("正在解析地址…"));
-        QUrl nom(QStringLiteral("https://nominatim.openstreetmap.org/search"));
-        QUrlQuery q;
-        q.addQueryItem(QStringLiteral("q"), text);
-        q.addQueryItem(QStringLiteral("format"), QStringLiteral("json"));
-        q.addQueryItem(QStringLiteral("limit"), QStringLiteral("1"));
-        nom.setQuery(q);
-        auto *reply = mapNetwork_->get(TencentApi::request(nom));
-        connect(reply, &QNetworkReply::finished, this,
-                [reply, status, &pickLat, &pickLng, &picked, loadMap, text] {
-                    const QJsonArray hits = QJsonDocument::fromJson(reply->readAll()).array();
-                    reply->deleteLater();
-                    if (hits.isEmpty()) {
-                        status->setText(u8("没找到该地址，请换个写法或直接点地图。"));
-                        return;
-                    }
-                    const QJsonObject first = hits.first().toObject();
-                    pickLat = first.value(QStringLiteral("lat")).toString().toDouble();
-                    pickLng = first.value(QStringLiteral("lon")).toString().toDouble();
-                    picked = validCoordinate(pickLat, pickLng);
-                    status->setText(picked ? u8("已定位到：%1，可再点地图微调。").arg(text)
-                                           : u8("地址坐标无效，请点地图。"));
-                    if (picked)
-                        loadMap();
-                });
+        const TencentApi::Geo g = TencentApi::geocode(text);
+        pickLat = g.lat;
+        pickLng = g.lng;
+        picked = g.ok && validCoordinate(pickLat, pickLng);
+        status->setText(picked ? u8("已定位到：%1，可拖动、滚轮缩放或再点地图微调。").arg(g.name.isEmpty() ? text : g.name)
+                               : u8("没找到该地址，请换个写法或直接点地图。"));
+        if (picked) {
+            map->setView(pickLat, pickLng, map->zoom());
+            refreshPickPin();
+            loadMap();
+        }
     });
 
     dialog.addCancel(u8("取消"));
@@ -1392,7 +1581,7 @@ void UserWindow::closeMyAccount()
     controller_.request("CLOSE_ACCOUNT");
 }
 
-/** 按当前定位拉天气，高德失败时回退 Open-Meteo。 */
+/** 按当前定位拉天气，写到附近电站页顶部。腾讯配额用尽时改 Open-Meteo。 */
 void UserWindow::fetchLocalWeather()
 {
     if (!weatherHint_ || !mapNetwork_)
@@ -1420,26 +1609,15 @@ void UserWindow::fetchLocalWeather()
         meteo();
         return;
     }
-    auto *reply = mapNetwork_->get(TencentApi::request(TencentApi::weatherAdcodeUrl(lat, lng)));
+    auto *reply = mapNetwork_->get(TencentApi::request(TencentApi::weatherNowUrl(lat, lng)));
     connect(reply, &QNetworkReply::finished, this, [this, reply, apply, meteo] {
-        const QString adcode = TencentApi::parseWeatherAdcode(
-            QJsonDocument::fromJson(reply->readAll()).object());
+        const TencentApi::Weather wx =
+            TencentApi::parseWeather(QJsonDocument::fromJson(reply->readAll()).object());
         reply->deleteLater();
-        if (adcode.isEmpty()) {
+        if (wx.ok)
+            apply(wx);
+        else
             meteo();
-            return;
-        }
-        auto *weatherReply = mapNetwork_->get(
-            TencentApi::request(TencentApi::weatherNowUrl(adcode)));
-        connect(weatherReply, &QNetworkReply::finished, this, [weatherReply, apply, meteo] {
-            const TencentApi::Weather wx = TencentApi::parseWeather(
-                QJsonDocument::fromJson(weatherReply->readAll()).object());
-            weatherReply->deleteLater();
-            if (wx.ok)
-                apply(wx);
-            else
-                meteo();
-        });
     });
 }
 
@@ -1472,41 +1650,76 @@ void UserWindow::renderStations(const QJsonObject &data)
 
     clearBox(stationBox_);
 
-    // 获取电站数组并按距离排序
-    QJsonArray stations = data.value("stations").toArray();
-    QVector<QJsonObject> stationList;
-    for (const auto &v : stations) {
-        stationList.append(v.toObject());
-    }
-
-    // 如果已定位，按距离排序
-    if (useGps_ || (locLat_ != 39.9644 || locLng_ != 116.3473)) {
-        std::sort(stationList.begin(), stationList.end(),
-            [this](const QJsonObject &a, const QJsonObject &b) {
-                double distA = haversine(locLat_, locLng_,
-                                         a.value("lat").toDouble(),
-                                         a.value("lng").toDouble());
-                double distB = haversine(locLat_, locLng_,
-                                         b.value("lat").toDouble(),
-                                         b.value("lng").toDouble());
-                return distA < distB;
+    const auto nearby = data.value("nearbyPiles").toArray();
+    if (!nearby.isEmpty()) {
+        auto *h = new QLabel(useGps_ ? u8("距您最近的充电桩") : u8("最近充电桩"));
+        h->setObjectName("h2");
+        stationBox_->addWidget(h);
+        auto *hint = new QLabel(useGps_
+                                    ? u8("已按您的定位计算直线距离，由近到远")
+                                    : u8("按您填写的所在地自动匹配，距离由近到远"));
+        hint->setObjectName("muted");
+        stationBox_->addWidget(hint);
+        for (const auto &v : nearby) {
+            const auto p = v.toObject();
+            auto *c = card();
+            auto *cl = new QVBoxLayout(c);
+            cl->setContentsMargins(14, 12, 14, 12);
+            cl->setSpacing(6);
+            auto *row = new QHBoxLayout;
+            const QString code = p.value("code").toString().isEmpty()
+                                     ? p.value("pileNo").toString()
+                                     : p.value("code").toString();
+            const QString stName = p.value("stationName").toString().isEmpty()
+                                       ? p.value("station").toString()
+                                       : p.value("stationName").toString();
+            auto *name = new QLabel(code + "  " + stName);
+            name->setObjectName("cardTitle");
+            QString st = p.value("status").toString();
+            if (st == u8("闲置"))
+                st = u8("空闲");
+            else if (st == u8("在用"))
+                st = u8("占用");
+            auto *pill = new QLabel(st);
+            pill->setObjectName(st == u8("空闲") ? "pillOk" : (st == u8("故障") ? "pillOff" : "pillBusy"));
+            row->addWidget(name, 1);
+            row->addWidget(pill, 0, Qt::AlignRight);
+            cl->addLayout(row);
+            const QString ptype = p.value("pileType").toString().isEmpty()
+                                      ? p.value("type").toString()
+                                      : p.value("pileType").toString();
+            auto *meta = new QLabel(QString::fromUtf8("%1  ·  %2  ·  %3 km  ·  ¥%4/度")
+                                        .arg(p.value("stationAddress").toString())
+                                        .arg(ptype)
+                                        .arg(p.value("distanceKm").toDouble(), 0, 'f', 1)
+                                        .arg(p.value("pricePerKwh").toDouble(), 0, 'f', 2));
+            meta->setObjectName("muted");
+            meta->setWordWrap(true);
+            cl->addWidget(meta);
+            auto *go = new QPushButton(u8("去该站选桩"));
+            const int sid = p.value("stationId").toInt();
+            connect(go, &QPushButton::clicked, this, [this, sid] {
+                controller_.request("QUERY_PILES", QJsonObject{{"stationId", sid}});
             });
+            cl->addWidget(go);
+            stationBox_->addWidget(c);
+        }
     }
 
-    // 渲染排序后的电站列表
     auto *sh = new QLabel(u8("附近充电站"));
     sh->setObjectName("h2");
     stationBox_->addWidget(sh);
 
-    if (stationList.isEmpty()) {
+    const auto arr = data.value("stations").toArray();
+    if (arr.isEmpty()) {
         auto *lab = new QLabel(u8("附近暂无充电站，请换一个更具体的地址试试"));
         lab->setObjectName("muted");
         stationBox_->addWidget(lab);
         stationBox_->addStretch();
         return;
     }
-
-    for (const auto &s : stationList) {
+    for (const auto &v : arr) {
+        const auto s = v.toObject();
         auto *c = card();
         auto *cl = new QVBoxLayout(c);
         cl->setContentsMargins(16, 14, 16, 14);
@@ -1845,7 +2058,7 @@ void UserWindow::openNav(const QJsonObject &station)
     showStationLocation(station);
 }
 
-/** 地图弹窗：静态图 + 天气 + 路线，不经 Dispatch。 */
+/** 地图弹窗：可拖动滚轮缩放的瓦片 + 天气 + 路线，不经 Dispatch。 */
 void UserWindow::showStationLocation(const QJsonObject &station)
 {
     const double lat = station.value("lat").toDouble();
@@ -1863,13 +2076,31 @@ void UserWindow::showStationLocation(const QJsonObject &station)
     dialog.setWindowTitle(u8("充电站位置与导航"));
     dialog.polish(400, 680);
 
-    auto *map = new QLabel(u8("正在加载地图…"));
-    map->setAlignment(Qt::AlignCenter);
+    auto *map = new PanMapLabel;
     map->setMinimumSize(340, 220);
+    map->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     map->setStyleSheet(QStringLiteral(
         "background:#F8FAFC;border:1px solid #E2E8F0;border-radius:12px;color:#64748B;font-size:14px;"));
-    map->setScaledContents(false);
+    map->setText(u8("正在加载地图…"));
+    map->setFocus();
     dialog.body()->addWidget(map, 1);
+
+    auto *stZoomRow = new QHBoxLayout;
+    auto *zoomOut = new QPushButton(u8("缩小"));
+    zoomOut->setObjectName("ghost");
+    auto *zoomIn = new QPushButton(u8("放大"));
+    zoomIn->setObjectName("ghost");
+    auto *stZoomHint = new QLabel(u8("滚轮缩放更顺手"));
+    stZoomHint->setObjectName("uiSheetHint");
+    stZoomRow->addWidget(zoomOut);
+    stZoomRow->addWidget(zoomIn);
+    stZoomRow->addWidget(stZoomHint, 1);
+    dialog.body()->addLayout(stZoomRow);
+
+    auto *legend = new QLabel(u8("拖动地图，滚轮缩放。蓝色「我」= 当前位置，红色「桩」= 充电站，两点会留在图上。"));
+    legend->setObjectName("uiSheetHint");
+    legend->setWordWrap(true);
+    dialog.body()->addWidget(legend);
 
     auto *routeBar = new QGridLayout;
     routeBar->setHorizontalSpacing(10);
@@ -1887,7 +2118,7 @@ void UserWindow::showStationLocation(const QJsonObject &station)
     routeBar->addWidget(route, 0, 2);
     auto *open = new QPushButton(u8("开始导航"));
     routeBar->addWidget(open, 1, 0, 1, 2);
-    auto *osm = new QPushButton(u8("网页路线"));
+    auto *osm = new QPushButton(u8("腾讯地图"));
     osm->setObjectName("ghost");
     routeBar->addWidget(osm, 1, 2);
     routeBar->setColumnStretch(1, 1);
@@ -1919,53 +2150,47 @@ void UserWindow::showStationLocation(const QJsonObject &station)
     dialog.addClose();
 
     const QJsonObject stationCopy = station;
-    const QPointer<QLabel> mapGuard(map);
+    const QPointer<PanMapLabel> mapGuard(map);
     const QPointer<QLabel> weatherGuard(weather);
     if (mapNetwork_) {
-        auto *mapReply = mapNetwork_->get(TencentApi::request(TencentApi::staticMapUrl(lat, lng)));
-        connect(mapReply, &QNetworkReply::finished, this, [this, mapReply, mapGuard, lat, lng] {
-            const QByteArray raw = mapReply->readAll();
-            QPixmap pix;
-            const bool loaded = mapReply->error() == QNetworkReply::NoError
-                                && pix.loadFromData(raw);
-            QString amapError;
-            if (mapReply->error() != QNetworkReply::NoError) {
-                amapError = mapReply->errorString();
-            } else {
-                const QJsonObject errorBody = QJsonDocument::fromJson(raw).object();
-                amapError = errorBody.value(QStringLiteral("info")).toString();
-                if (amapError.isEmpty())
-                    amapError = u8("返回内容不是有效图片");
-            }
-            if (mapGuard) {
-                if (loaded) {
-                    mapGuard->setPixmap(pix.scaled(mapGuard->size(), Qt::KeepAspectRatio,
-                                                   Qt::SmoothTransformation));
-                    mapGuard->setText(QString());
-                } else {
-                    mapGuard->setText(u8("高德地图加载失败，正在尝试备用地图…"));
-                    auto *fallback = mapNetwork_->get(
-                        TencentApi::request(TencentApi::fallbackMapUrl(lat, lng)));
-                    connect(fallback, &QNetworkReply::finished, this, [fallback, mapGuard, amapError] {
-                        const QByteArray fallbackRaw = fallback->readAll();
-                        QPixmap fallbackPix;
-                        if (mapGuard && fallback->error() == QNetworkReply::NoError
-                            && fallbackPix.loadFromData(fallbackRaw)) {
-                            mapGuard->setPixmap(fallbackPix.scaled(
-                                mapGuard->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-                            mapGuard->setText(QString());
-                        } else if (mapGuard) {
-                            const QString detail = fallback->error() == QNetworkReply::NoError
-                                ? u8("返回内容不是有效图片") : fallback->errorString();
-                            mapGuard->setText(u8("高德地图：") + amapError
-                                              + u8("；备用地图：") + detail
-                                              + u8("。可点击“开始导航”打开路线。"));
-                        }
-                        fallback->deleteLater();
-                    });
-                }
-            }
-            mapReply->deleteLater();
+        const QJsonObject originNowMap = coord();
+        const double fromLat = originNowMap.value("lat").toDouble();
+        const double fromLng = originNowMap.value("lng").toDouble();
+        const bool hasUser = validCoordinate(fromLat, fromLng);
+        QVector<MapPin> pins;
+        if (hasUser)
+            pins.append({fromLat, fromLng, QColor("#2563EB"), u8("我")});
+        pins.append({lat, lng, QColor("#DC2626"), u8("桩")});
+        map->setPins(pins);
+        const int initZoom = hasUser ? fitZoomForWidget(fromLat, fromLng, lat, lng, QSize(340, 220)) : 15;
+        map->setView(hasUser ? (fromLat + lat) / 2.0 : lat,
+                     hasUser ? (fromLng + lng) / 2.0 : lng, initZoom);
+        int navGen = 0;
+        auto loadNav = [this, mapGuard, &navGen]() {
+            if (!mapNetwork_ || !mapGuard)
+                return;
+            const int gen = ++navGen;
+            const int z = mapGuard->zoom();
+            fetchTileGrid(mapNetwork_, this, mapGuard->viewLat(), mapGuard->viewLng(), z,
+                          [mapGuard, gen, &navGen, z](const QPixmap &pix, int ox, int oy, int tilePx) {
+                              if (!mapGuard || gen != navGen)
+                                  return;
+                              if (!pix.isNull())
+                                  mapGuard->setMosaic(pix, ox, oy, tilePx, z);
+                              else
+                                  mapGuard->setText(u8("地图暂不可用，仍可拖动查看红蓝两点"));
+                          });
+        };
+        map->onViewChanged = loadNav;
+        connect(zoomIn, &QPushButton::clicked, this, [map] { map->nudgeZoom(1); });
+        connect(zoomOut, &QPushButton::clicked, this, [map] { map->nudgeZoom(-1); });
+        QTimer::singleShot(0, map, [mapGuard, hasUser, fromLat, fromLng, lat, lng, loadNav] {
+            if (!mapGuard)
+                return;
+            if (hasUser)
+                mapGuard->setView((fromLat + lat) / 2.0, (fromLng + lng) / 2.0,
+                                  fitZoomForWidget(fromLat, fromLng, lat, lng, mapGuard->size()));
+            loadNav();
         });
         auto applyWx = [weatherGuard](const TencentApi::Weather &wx) {
             if (!weatherGuard)
@@ -1975,31 +2200,13 @@ void UserWindow::showStationLocation(const QJsonObject &station)
             else
                 weatherGuard->setText(u8("天气暂不可用，仍可查看位置和路线。"));
         };
-        auto *wreply = mapNetwork_->get(TencentApi::request(TencentApi::weatherAdcodeUrl(lat, lng)));
+        auto *wreply = mapNetwork_->get(TencentApi::request(TencentApi::weatherNowUrl(lat, lng)));
         connect(wreply, &QNetworkReply::finished, this, [this, wreply, lat, lng, applyWx] {
-            const QString adcode = TencentApi::parseWeatherAdcode(
-                QJsonDocument::fromJson(wreply->readAll()).object());
+            const TencentApi::Weather wx =
+                TencentApi::parseWeather(QJsonDocument::fromJson(wreply->readAll()).object());
             wreply->deleteLater();
-            if (!adcode.isEmpty()) {
-                auto *weatherReply = mapNetwork_->get(
-                    TencentApi::request(TencentApi::weatherNowUrl(adcode)));
-                connect(weatherReply, &QNetworkReply::finished, this,
-                        [this, weatherReply, lat, lng, applyWx] {
-                    const TencentApi::Weather wx = TencentApi::parseWeather(
-                        QJsonDocument::fromJson(weatherReply->readAll()).object());
-                    weatherReply->deleteLater();
-                    if (wx.ok) {
-                        applyWx(wx);
-                        return;
-                    }
-                    auto *fb = mapNetwork_->get(
-                        TencentApi::request(TencentApi::openMeteoUrl(lat, lng)));
-                    connect(fb, &QNetworkReply::finished, this, [fb, applyWx] {
-                        applyWx(TencentApi::parseOpenMeteo(
-                            QJsonDocument::fromJson(fb->readAll()).object()));
-                        fb->deleteLater();
-                    });
-                });
+            if (wx.ok) {
+                applyWx(wx);
                 return;
             }
             auto *fb = mapNetwork_->get(TencentApi::request(TencentApi::openMeteoUrl(lat, lng)));
@@ -2025,7 +2232,7 @@ void UserWindow::showStationLocation(const QJsonObject &station)
         }
         const QString m = mode->currentData().toString();
         if (useOsm)
-            openExternalUrl(osmDirectionsUrl(stationCopy, origin, m));
+            openExternalUrl(tencentRoutePlanUrl(stationCopy, origin, m));
         else
             openExternalUrl(amapNavigationUrl(stationCopy, origin, m));
     };
@@ -2036,7 +2243,7 @@ void UserWindow::showStationLocation(const QJsonObject &station)
     dialog.exec();
 }
 
-/** 按用户当前位置到电站查询路况时间，优先 OSRM。 */
+/** 按用户当前位置到电站查询路况时间，走腾讯路线规划。 */
 void UserWindow::queryTencentRoute(const QJsonObject &station, const QString &mode,
                                    QLabel *resultLabel, QPushButton *queryButton)
 {
@@ -2060,12 +2267,12 @@ void UserWindow::queryTencentRoute(const QJsonObject &station, const QString &mo
     const QPointer<QPushButton> buttonGuard(queryButton);
     const bool fromGps = useGps_;
     auto *fb = mapNetwork_->get(
-        TencentApi::request(TencentApi::osrmUrl(mode, fromLat, fromLng, toLat, toLng)));
+        TencentApi::request(TencentApi::directionUrl(mode, fromLat, fromLng, toLat, toLng)));
     connect(fb, &QNetworkReply::finished, this, [fb, mode, resultGuard, buttonGuard, fromGps] {
         double meters = 0;
         int seconds = 0;
-        const bool ok = TencentApi::parseOsrm(QJsonDocument::fromJson(fb->readAll()).object(),
-                                              &meters, &seconds);
+        const bool ok = TencentApi::parseDirection(QJsonDocument::fromJson(fb->readAll()).object(),
+                                                   &meters, &seconds);
         if (resultGuard) {
             if (ok)
                 resultGuard->setText((fromGps ? u8("从您的位置%1：%2，路程约 %3 km")
@@ -2073,7 +2280,7 @@ void UserWindow::queryTencentRoute(const QJsonObject &station, const QString &mo
                                          .arg(routeModeName(mode), durationText(seconds))
                                          .arg(meters / 1000.0, 0, 'f', 1));
             else
-                resultGuard->setText(u8("路线估算失败，仍可点「开始导航」打开高德或网页路线。"));
+                resultGuard->setText(u8("路线估算失败，仍可点「开始导航」打开高德，或「腾讯地图」。"));
         }
         if (buttonGuard)
             buttonGuard->setEnabled(true);
@@ -2090,42 +2297,26 @@ void UserWindow::onResp(QJsonObject obj)
     if (code != 0) {
         const QString msg = obj.value("message").toString();
         loginPage_->setStatus(msg.isEmpty() ? u8("请求失败") : msg);
-
-        // 自动登录失败时静默处理
-        if (isAutoLoginAttempt_ && (type == "LOGIN" || type == "REGISTER")) {
-            isAutoLoginAttempt_ = false;
-            controller_.clearCredentials();
-            loginPage_->setStatus(u8("自动登录失败，请手动登录"));
-            root_->setCurrentIndex(0);
-            return;
-        }
-
-        // 检查是否是封禁/冻结（403已经在controller里处理了）
-        if (code == 403 && (type == "LOGIN" || type == "REGISTER")) {
-            // controller已经处理了，这里不再重复
-            return;
-        }
-
         uiWarn(this, u8("提示"), msg.isEmpty() ? (type + u8(" 失败")) : msg);
         // 只有登录/注册失败才停在登录页；进首页后的接口失败不得把人踢回去
         if (type == "LOGIN" || type == "REGISTER") {
+            if (autoLoginAttempt_) {
+                autoLoginAttempt_ = false;
+                controller_.clearCredentials();
+                if (loginPage_)
+                    loginPage_->setRememberMeChecked(false);
+            }
             controller_.signOut();
             root_->setCurrentIndex(0);
         }
         return;
     }
     const QJsonObject data = obj.value("data").toObject();
-
-    // 登录/注册成功后清除自动登录尝试标志
     if (type == "LOGIN" || type == "REGISTER") {
-        isAutoLoginAttempt_ = false;
-        // 如果登录成功且用户勾选了"记住我"，凭证已在调用时保存
+        autoLoginAttempt_ = false;
         showShell();
         applyUser(controller_.user());
-        return;
-    }
-
-    if (type == "CLOSE_ACCOUNT") {
+    } else if (type == "CLOSE_ACCOUNT") {
         locLat_ = 39.9644;
         locLng_ = 116.3473;
         useGps_ = false;
@@ -2195,6 +2386,7 @@ void UserWindow::onResp(QJsonObject obj)
                u8("流水号 %1\n金额 ¥%2")
                    .arg(data.value("tradeNo").toString())
                    .arg(data.value("amount").toDouble(), 0, 'f', 2));
+        // applyUser() calls refreshMe(), which requests LIST_RECHARGE once when logged in.
         applyUser(controller_.user());
     } else if (type == "UPDATE_PROFILE") {
         applyUser(controller_.user());
@@ -2202,16 +2394,4 @@ void UserWindow::onResp(QJsonObject obj)
     } else if (type == "LIST_RECHARGE") {
         renderRecharge(data.value("records").toArray());
     }
-}
-
-double UserWindow::haversine(double lat1, double lng1, double lat2, double lng2)
-{
-    const double r = 6371.0;
-    const double p1 = qDegreesToRadians(lat1);
-    const double p2 = qDegreesToRadians(lat2);
-    const double dphi = qDegreesToRadians(lat2 - lat1);
-    const double dl = qDegreesToRadians(lng2 - lng1);
-    const double a = qSin(dphi / 2) * qSin(dphi / 2)
-        + qCos(p1) * qCos(p2) * qSin(dl / 2) * qSin(dl / 2);
-    return r * 2 * qAtan2(qSqrt(a), qSqrt(1 - a));
 }

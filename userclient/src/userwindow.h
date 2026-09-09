@@ -8,7 +8,7 @@
  * 【职责】画界面、做格式校验、把页面操作交给 UserController；不写 SQLite。
  * 【原理】root_ 两页（登录 / 主壳）；pages_ 里各业务页。网络状态由 UserController 管理。
  *         回包统一 onResp：失败弹 UiSheet；PUSH_CHARGE 只刷新充电页。
- * 【协作】依赖 UserController、uidialog。地图默认 OSM/Carto 瓦片（无日配额），不经过管理端业务。
+ * 【协作】依赖 UserController、uidialog。地图用国内高德/腾讯瓦片，可拖动、滚轮缩放，不经过管理端业务。
  * 【联调】服务器填管理端底栏 IP:8888；本机自测 127.0.0.1:8888。
  * 【详见】docs/模块与协作说明.md
  */
@@ -98,7 +98,7 @@ private:
     void setReviewStars(int n);
     /** 文字不能空，发 REVIEW_STATION（stationId/pileId/score/comment）。 */
     void submitReview();
-    /** 弹出地图+天气+路线；天气优先走高德 HTTP，不经 Dispatch。 */
+    /** 弹出地图+天气+路线；瓦片可拖动滚轮缩放，天气走腾讯 HTTP，不经 Dispatch。 */
     void showStationLocation(const QJsonObject &station);
     /** 找站成功后按当前定位拉天气，写到附近电站页。 */
     void fetchLocalWeather();
@@ -121,16 +121,8 @@ private:
     void closeMyAccount();
     /** 按登录页填的 host:port 让控制器重新连接。 */
     void reconnect();
-    /** 通过IP获取用户位置 */
-    void fetchLocationByIP();
-    /** 计算两点间距离（公里） */
-    static double haversine(double lat1, double lng1, double lat2, double lng2);
-
-    // 自动登录相关
+    /** 连上后若本机还有未过期的「记住我」凭证，则自动 LOGIN。 */
     void tryAutoLogin();
-    void onAutoLoginFailed();
-    void onSessionExpired();
-    void onAccountBlocked(const QString &message);
 
     /** 登录页：服务器地址、手机、密码、注册确认。 */
     QWidget *buildLogin();
@@ -157,12 +149,12 @@ private:
     void highlightTab(int pageIndex);
 
     UserController controller_;
-    QNetworkAccessManager *mapNetwork_ = nullptr; ///< 地图、天气与路线 HTTP
+    QNetworkAccessManager *mapNetwork_ = nullptr; ///< 仅腾讯地图 HTTP
     QJsonObject currentStation_;                  ///< 点进去的那座站
     QJsonObject currentOrder_;                    ///< 充电页正在看的订单
     QJsonObject currentPile_;                     ///< 评价页正在看的桩
     int reviewStars_ = 5;
-    bool isAutoLoginAttempt_ = false;
+    bool autoLoginAttempt_ = false;
 
     QStackedWidget *root_ = nullptr;
     QStackedWidget *pages_ = nullptr;
@@ -178,7 +170,6 @@ private:
     double locLng_ = 116.3473;
     bool useGps_ = false;
     bool pendingConsent_ = false;
-    bool hasLocationFromIP_ = false;
     QString gpsPlace_;
     QComboBox *pileType_ = nullptr;
     QVBoxLayout *stationBox_ = nullptr;

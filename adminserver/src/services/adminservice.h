@@ -22,8 +22,7 @@ public:
     QVector<QVariantMap> listUsers(const QString &keyword) const;
     /** 设备、用户和站点写操作；每次操作维持原审计日志语义。 */
     QString rebootPile(int pileId);
-    /** 返回界面可直接显示的操作结果，写库失败不会误报成功。 */
-    QString freezeUser(int userId, bool freeze);
+    void freezeUser(int userId, bool freeze);
     int addStation(const QVariantMap &data);
     QString applyDefaultTariff(int stationId);
     QString adoptDispatchPlan(int planId);
@@ -34,8 +33,6 @@ public:
     QVector<QVariantMap> listAudit(int limit = 80) const;
     QVector<QVariantMap> listAdminOrders(const QString &keyword) const;
 private:
-    /** 仅在调用者事务内替换费率，避免新增电站/采纳建议出现部分成功。 */
-    bool replaceTariff(int stationId, double base, double peakFactor = 1.25);
     Database *db_; SessionService *sessions_; ChargeService *charges_;
 };
 #endif

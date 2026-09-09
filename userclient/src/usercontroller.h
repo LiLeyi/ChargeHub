@@ -31,9 +31,9 @@ public:
     void beginCharge(int pileId);
     void signOut();
 
-    // 自动登录相关
+    /** 勾选「记住我」后写入本机设置，7 天内连上服务器可自动 LOGIN。 */
     void saveCredentials(const QString &phone, const QString &password);
-    bool loadCredentials(QString &phone, QString &password);
+    bool loadCredentials(QString &phone, QString &password) const;
     bool isAutoLoginValid() const;
     void clearCredentials();
 
@@ -42,8 +42,6 @@ signals:
     void responded(QJsonObject obj);
     void failed(QString message);
     void chargeStartBlocked(QJsonObject order);
-    void sessionExpired();
-    void accountBlocked(QString message);
 
 private:
     Client client_;

@@ -23,6 +23,22 @@ bool validPhone(const QString &phone)
     return expression.match(phone).hasMatch();
 }
 
+bool strongRegisterPassword(const QString &password)
+{
+    if (password.size() < 6 || password.size() > 20)
+        return false;
+    bool hasUpper = false, hasLower = false, hasDigit = false;
+    for (const QChar &ch : password) {
+        if (ch.isUpper())
+            hasUpper = true;
+        else if (ch.isLower())
+            hasLower = true;
+        else if (ch.isDigit())
+            hasDigit = true;
+    }
+    return hasUpper && hasLower && hasDigit;
+}
+
 double money(double value)
 {
     return qRound64(value * 100.0) / 100.0;
@@ -227,8 +243,8 @@ ServiceResult SessionService::registerUser(const QJsonObject &data)
     const QString password = data.value("password").toString();
     if (!validPhone(phone))
         return ServiceResult::fail(400, QString::fromUtf8("请输入正确的手机号格式"));
-    if (password.size() < 6 || password.size() > 20)
-        return ServiceResult::fail(400, QString::fromUtf8("密码长度须为 6~20 位"));
+    if (!strongRegisterPassword(password))
+        return ServiceResult::fail(400, QString::fromUtf8("注册密码须为 6～20 位，并同时包含大写字母、小写字母和数字"));
 
     const auto old = db_->one("SELECT status FROM user WHERE phone=?", {phone});
     if (!old.isEmpty()) {

@@ -75,6 +75,13 @@ QPushButton#tabBtn {
 }
 QPushButton#tabBtn:hover { background:#F0FDFA; color:#0F766E; }
 QPushButton#tabBtn:checked { background:transparent; color:#0D9488; font-weight:800; }
+QFrame#authNav { background:transparent; border:none; }
+QPushButton#authTab {
+    background:#E7EEF0; color:#64748B; border:none; border-radius:10px;
+    min-height:34px; padding:4px 8px; font-size:14px; font-weight:700;
+}
+QPushButton#authTab:hover { background:#CCFBF1; color:#0F766E; }
+QPushButton#authTab:checked { background:#0D9488; color:#FFFFFF; }
 QPushButton#link {
     background:transparent; color:#0D9488; border:none;
     min-height:26px; padding:2px 4px; font-size:13px; font-weight:600;

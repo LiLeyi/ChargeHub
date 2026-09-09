@@ -32,7 +32,7 @@
 | type | 登录后 | data 主要字段 | 说明 |
 |------|--------|---------------|------|
 | LOGIN | 否 | phone, password | 成功返回 user + token |
-| REGISTER | 否 | phone, password | 已注销手机号 409 |
+| REGISTER | 否 | phone, password | 已注销手机号 409。密码须 6～20 位，并同时含大写字母、小写字母和数字。登录仍允许演示号等已有弱密码。 |
 | UPDATE_PROFILE | 是 | nickname / avatarBase64 / clearAvatar / address | 改资料；住址会解析坐标 |
 | RECHARGE | 是 | amount | 模拟充值 |
 | QUERY_STATIONS | 是 | address, radiusKm, lat, lng；可选 useGps, placeName | 附近电站 + nearbyPiles。`useGps=true` 时按 lat/lng 算距离，不解析 address |
