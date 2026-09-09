@@ -5,6 +5,8 @@
 
 class QLabel;
 class QLineEdit;
+class QCheckBox;
+class QPushButton;
 
 class LoginPage : public QWidget
 {
@@ -16,24 +18,41 @@ public:
     quint16 serverPort() const;
     QString serverAddress() const;
     void setStatus(const QString &message);
+    void setPhone(const QString &phone);
+    void clearPassword();
+
+    // 自动登录相关
+    bool isRememberMeChecked() const;
+    QString getPhone() const;
+    QString getPassword() const;
 
 signals:
     void connectRequested();
     void authenticationRequested(QString type, QString phone, QString password);
+    void switchToRegister();
+    void switchToLogin();
 
 private slots:
-    /** 当手机号文本改变时，动态显示/隐藏确认密码框 */
-    void onPhoneTextChanged(const QString &text);
+    void onLoginClicked();
+    void onRegisterClicked();
+    void onSwitchToRegister();
+    void onSwitchToLogin();
 
 private:
-    void submitLogin();
-    void submitRegistration();
+    void showLoginForm();
+    void showRegisterForm();
     bool validateCredentials(QString *phone, QString *password, bool isRegister);
 
     QLineEdit *phoneEdit_ = nullptr;
     QLineEdit *passwordEdit_ = nullptr;
     QLineEdit *confirmEdit_ = nullptr;
+    QCheckBox *rememberMe_ = nullptr;
     QLabel *statusLabel_ = nullptr;
+    QPushButton *loginButton_ = nullptr;
+    QPushButton *registerButton_ = nullptr;
+    QPushButton *switchButton_ = nullptr;
+    QWidget *loginForm_ = nullptr;
+    QWidget *registerForm_ = nullptr;
     bool isRegisterMode_ = false;
 };
 
