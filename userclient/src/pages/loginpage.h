@@ -28,7 +28,7 @@ private slots:
 private:
     void submitLogin();
     void submitRegistration();
-    bool validateCredentials(QString *phone, QString *password);
+    bool validateCredentials(QString *phone, QString *password, bool isRegister);
 
     QLineEdit *phoneEdit_ = nullptr;
     QLineEdit *passwordEdit_ = nullptr;
