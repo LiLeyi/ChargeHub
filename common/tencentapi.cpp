@@ -257,7 +257,9 @@ void TencentApi::centeredMapPixelToLatLng(double centerLat, double centerLng, in
     if (!lat || !lng || width <= 0 || height <= 0)
         return;
     zoom = qBound(0, zoom, 20);
-    const double world = 256.0 * static_cast<double>(1 << zoom);
+    // AMap static maps render at a 2x pixel density: one logical Web-Mercator
+    // tile spans 512 image pixels at a given zoom level.
+    const double world = 512.0 * static_cast<double>(1 << zoom);
     const double centerX = (centerLng + 180.0) / 360.0 * world;
     const double centerRad = centerLat * 3.14159265358979323846 / 180.0;
     const double centerY = (1.0 - std::log(std::tan(centerRad)

@@ -153,6 +153,7 @@ private:
     UserController controller_;
     QNetworkAccessManager *mapNetwork_ = nullptr; ///< 地图、天气与路线 HTTP
     QJsonObject currentStation_;                  ///< 点进去的那座站
+    QJsonArray nearbyStations_;                   ///< 最近一次查询到的附近充电站
     QJsonObject currentOrder_;                    ///< 充电页正在看的订单
     QJsonObject currentPile_;                     ///< 评价页正在看的桩
     int reviewStars_ = 5;
