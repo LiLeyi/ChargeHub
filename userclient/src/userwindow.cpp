@@ -933,9 +933,15 @@ void UserWindow::startLocate()
         queryStations();
         return;
     }
+#ifdef Q_OS_WIN
     if (locMatch_)
         locMatch_->setText(u8("正在通过 Windows 定位服务获取位置…"));
     tryWindowsLocate();
+#else
+    if (locMatch_)
+        locMatch_->setText(u8("正在通过 IP 获取虚拟机的大致位置…"));
+    fetchLocationByIP();
+#endif
 }
 
 void UserWindow::applyGpsFix(double lat, double lng, const QString &place)
@@ -954,6 +960,14 @@ void UserWindow::tryWindowsLocate()
         exe = QStringLiteral("powershell.exe");
     auto *proc = new QProcess(this);
     proc->setProcessChannelMode(QProcess::MergedChannels);
+    connect(proc, &QProcess::errorOccurred, this, [this, proc](QProcess::ProcessError error) {
+        if (error != QProcess::FailedToStart)
+            return;
+        if (locMatch_)
+            locMatch_->setText(u8("系统定位无法启动，已使用默认参考点。可手动点击“地图选点”。"));
+        proc->deleteLater();
+        queryStations();
+    });
     QTimer::singleShot(14000, proc, [proc] {
         if (proc->state() != QProcess::NotRunning)
             proc->kill();
@@ -985,7 +999,7 @@ void UserWindow::tryWindowsLocate()
                 if (locMatch_)
                     locMatch_->setText(g.ok ? u8("系统定位精度不够，请在地图上点选您所在的位置。")
                                             : u8("未拿到精确系统定位，请在地图上点选，或填写住址。"));
-                pickMyLocation();
+                queryStations();
             });
     proc->start(exe, {QStringLiteral("-NoProfile"), QStringLiteral("-STA"),
                       QStringLiteral("-NonInteractive"), QStringLiteral("-Command"),
