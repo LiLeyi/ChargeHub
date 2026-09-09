@@ -126,6 +126,12 @@ private:
     /** 计算两点间距离（公里） */
     static double haversine(double lat1, double lng1, double lat2, double lng2);
 
+    // 自动登录相关
+    void tryAutoLogin();
+    void onAutoLoginFailed();
+    void onSessionExpired();
+    void onAccountBlocked(const QString &message);
+
     /** 登录页：服务器地址、手机、密码、注册确认。 */
     QWidget *buildLogin();
     /** 主壳：顶栏 + pages_ + 底部 Tab。 */
@@ -153,10 +159,10 @@ private:
     UserController controller_;
     QNetworkAccessManager *mapNetwork_ = nullptr; ///< 地图、天气与路线 HTTP
     QJsonObject currentStation_;                  ///< 点进去的那座站
-    QJsonArray nearbyStations_;                   ///< 最近一次查询到的附近充电站
     QJsonObject currentOrder_;                    ///< 充电页正在看的订单
     QJsonObject currentPile_;                     ///< 评价页正在看的桩
     int reviewStars_ = 5;
+    bool isAutoLoginAttempt_ = false;
 
     QStackedWidget *root_ = nullptr;
     QStackedWidget *pages_ = nullptr;
