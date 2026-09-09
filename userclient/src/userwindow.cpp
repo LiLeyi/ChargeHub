@@ -33,7 +33,6 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPixmap>
-#include <QPainter>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QFileInfo>
@@ -47,7 +46,6 @@
 #include <QtMath>
 #include <QUrl>
 #include <QUrlQuery>
-#include <QWheelEvent>
 #include <QTimer>
 #include <QSettings>
 #include <QtMath>
@@ -162,172 +160,15 @@ bool validCoordinate(double lat, double lng)
 /** 地图选点：点一下把像素换成经纬度。 */
 class MapPickLabel : public QLabel {
 public:
-    explicit MapPickLabel(QWidget *parent = nullptr) : QLabel(parent)
-    {
-        setMouseTracking(true);
-    }
+    explicit MapPickLabel(QWidget *parent = nullptr) : QLabel(parent) {}
     std::function<void(QPoint)> onClick;
-    std::function<void(QPoint)> onPan;
-    std::function<void(int)> onZoom;
-
-    void setMapPixmap(const QPixmap &pixmap)
-    {
-        map_ = pixmap;
-        dragOffset_ = {};
-        previewScale_ = 1.0;
-        update();
-    }
-
-    void setMapState(double centerLat, double centerLng, int zoom,
-                     double selectedLat, double selectedLng,
-                     const QJsonArray &stations)
-    {
-        centerLat_ = centerLat;
-        centerLng_ = centerLng;
-        zoom_ = zoom;
-        selectedLat_ = selectedLat;
-        selectedLng_ = selectedLng;
-        stations_ = stations;
-        update();
-    }
-
-    QSize mapImageSize() const
-    {
-        return QSize(qRound(map_.width() * previewScale_),
-                     qRound(map_.height() * previewScale_));
-    }
-
-    void previewZoom(int steps)
-    {
-        previewScale_ *= std::pow(2.0, steps);
-        previewScale_ = qBound(0.25, previewScale_, 4.0);
-        update();
-    }
-
-    void setSelectedPoint(double lat, double lng)
-    {
-        selectedLat_ = lat;
-        selectedLng_ = lng;
-        update();
-    }
-
 protected:
-    void paintEvent(QPaintEvent *) override
-    {
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.fillRect(rect(), QColor(QStringLiteral("#F8FAFC")));
-        if (map_.isNull()) {
-            painter.setPen(QColor(QStringLiteral("#64748B")));
-            painter.drawText(rect(), Qt::AlignCenter, text());
-            return;
-        }
-        const QSize shownSize = mapImageSize();
-        const QPoint topLeft((width() - shownSize.width()) / 2 + dragOffset_.x(),
-                             (height() - shownSize.height()) / 2 + dragOffset_.y());
-        painter.drawPixmap(QRect(topLeft, shownSize), map_);
-
-        auto pointFor = [this, topLeft, shownSize](double lat, double lng) {
-            const double world = 512.0 * static_cast<double>(1 << zoom_);
-            auto worldPoint = [world](double yLat, double xLng) {
-                const double x = (xLng + 180.0) / 360.0 * world;
-                const double rad = qDegreesToRadians(qBound(-85.05112878, yLat, 85.05112878));
-                const double pi = 3.14159265358979323846;
-                const double y = (1.0 - std::log(std::tan(rad) + 1.0 / std::cos(rad)) / pi)
-                                 / 2.0 * world;
-                return QPointF(x, y);
-            };
-            const QPointF center = worldPoint(centerLat_, centerLng_);
-            const QPointF target = worldPoint(lat, lng);
-            return QPointF(topLeft) + QPointF(shownSize.width() / 2.0, shownSize.height() / 2.0)
-                   + (target - center) * previewScale_;
-        };
-
-        painter.setPen(QPen(Qt::white, 2));
-        painter.setBrush(QColor(QStringLiteral("#10B981")));
-        for (const QJsonValue &value : stations_) {
-            const QJsonObject station = value.toObject();
-            const QPointF point = pointFor(station.value("lat").toDouble(),
-                                           station.value("lng").toDouble());
-            if (!rect().adjusted(-10, -10, 10, 10).contains(point.toPoint()))
-                continue;
-            painter.drawEllipse(point, 7, 7);
-        }
-
-        const QPointF selected = pointFor(selectedLat_, selectedLng_);
-        painter.setBrush(QColor(QStringLiteral("#EF4444")));
-        painter.drawEllipse(selected, 9, 9);
-        painter.setPen(QColor(QStringLiteral("#991B1B")));
-        painter.drawText(selected + QPointF(12, 5), QString::fromUtf8("当前选点"));
-    }
-
     void mousePressEvent(QMouseEvent *ev) override
     {
-        if (ev->button() == Qt::LeftButton) {
-            dragging_ = true;
-            pressPos_ = ev->pos();
-            dragOffset_ = {};
-            setCursor(Qt::ClosedHandCursor);
-            ev->accept();
-            return;
-        }
+        if (onClick)
+            onClick(ev->pos());
         QLabel::mousePressEvent(ev);
     }
-
-    void mouseMoveEvent(QMouseEvent *ev) override
-    {
-        if (dragging_) {
-            dragOffset_ = ev->pos() - pressPos_;
-            update();
-            ev->accept();
-            return;
-        }
-        QLabel::mouseMoveEvent(ev);
-    }
-
-    void mouseReleaseEvent(QMouseEvent *ev) override
-    {
-        if (dragging_ && ev->button() == Qt::LeftButton) {
-            dragging_ = false;
-            const QPoint delta = ev->pos() - pressPos_;
-            setCursor(Qt::OpenHandCursor);
-            if (delta.manhattanLength() < 6) {
-                dragOffset_ = {};
-                if (onClick)
-                    onClick(ev->pos());
-            } else if (onPan) {
-                onPan(delta);
-            }
-            update();
-            ev->accept();
-            return;
-        }
-        QLabel::mouseReleaseEvent(ev);
-    }
-
-    void wheelEvent(QWheelEvent *ev) override
-    {
-        const int steps = ev->angleDelta().y() > 0 ? 1 : (ev->angleDelta().y() < 0 ? -1 : 0);
-        if (steps != 0 && onZoom) {
-            onZoom(steps);
-            ev->accept();
-            return;
-        }
-        QLabel::wheelEvent(ev);
-    }
-
-private:
-    QPixmap map_;
-    QJsonArray stations_;
-    QPoint pressPos_;
-    QPoint dragOffset_;
-    bool dragging_ = false;
-    double centerLat_ = 0;
-    double centerLng_ = 0;
-    double selectedLat_ = 0;
-    double selectedLng_ = 0;
-    int zoom_ = 16;
-    double previewScale_ = 1.0;
 };
 
 QString windowsLocateScript()
@@ -410,6 +251,10 @@ UserWindow::UserWindow(QWidget *parent) : QMainWindow(parent)
     connect(&controller_, &UserController::connected, this, [this] {
         loginPage_->setStatus(u8("已连接运营平台"));
         statusBar()->showMessage(u8("已连接服务器"));
+        // 连接成功后尝试自动登录（如果还没有认证）
+        if (!controller_.isAuthenticated() && !isAutoLoginAttempt_) {
+            tryAutoLogin();
+        }
     });
     connect(&controller_, &UserController::failed, this, [this](const QString &m) {
         loginPage_->setStatus(m);
@@ -420,6 +265,8 @@ UserWindow::UserWindow(QWidget *parent) : QMainWindow(parent)
         uiWarn(this, u8("无法开始充电"), u8("您有未完成的充电订单，请先结算"));
         showCharge(order);
     });
+    connect(&controller_, &UserController::sessionExpired, this, &UserWindow::onSessionExpired);
+    connect(&controller_, &UserController::accountBlocked, this, &UserWindow::onAccountBlocked);
 
     // 状态栏显示连接状态
     statusBar()->showMessage(u8("正在连接服务器..."));
@@ -455,13 +302,78 @@ QWidget *UserWindow::buildLogin()
     connect(loginPage_, &LoginPage::connectRequested, this, &UserWindow::reconnect);
     connect(loginPage_, &LoginPage::authenticationRequested, this,
             [this](const QString &type, const QString &phone, const QString &password) {
+        // 保存登录凭证（如果勾选了"记住我"）
+        if (type == QStringLiteral("LOGIN") && loginPage_->isRememberMeChecked()) {
+            controller_.saveCredentials(phone, password);
+        }
         controller_.authenticate(type, phone, password);
         if (!controller_.isConnected()) {
             loginPage_->setStatus(u8("尚未连接，正在连接服务器…"));
             reconnect();
         }
     });
+    connect(loginPage_, &LoginPage::switchToRegister, this, [this]() {
+        loginPage_->setStatus(QString());
+    });
+    connect(loginPage_, &LoginPage::switchToLogin, this, [this]() {
+        loginPage_->setStatus(QString());
+    });
     return loginPage_;
+}
+
+void UserWindow::tryAutoLogin()
+{
+    if (isAutoLoginAttempt_)
+        return;
+    if (!controller_.isConnected())
+        return;
+
+    QString phone, password;
+    if (controller_.isAutoLoginValid() && controller_.loadCredentials(phone, password)) {
+        isAutoLoginAttempt_ = true;
+        loginPage_->setStatus(u8("正在自动登录…"));
+        controller_.authenticate(QStringLiteral("LOGIN"), phone, password);
+    } else {
+        // 自动登录无效，清除过期凭证
+        controller_.clearCredentials();
+    }
+}
+
+void UserWindow::onAutoLoginFailed()
+{
+    isAutoLoginAttempt_ = false;
+    controller_.clearCredentials();
+    loginPage_->setStatus(u8("自动登录失败，请手动登录"));
+    loginPage_->clearPassword();
+    root_->setCurrentIndex(0);
+}
+
+void UserWindow::onSessionExpired()
+{
+    isAutoLoginAttempt_ = false;
+    // 保留手机号，清空密码
+    loginPage_->clearPassword();
+    loginPage_->setStatus(u8("会话已过期，请重新登录"));
+    root_->setCurrentIndex(0);
+    statusBar()->showMessage(u8("会话已过期，请重新登录"));
+}
+
+void UserWindow::onAccountBlocked(const QString &message)
+{
+    isAutoLoginAttempt_ = false;
+    controller_.clearCredentials();
+    loginPage_->clearPassword();
+
+    QString displayMsg = message;
+    if (message.contains(u8("冻结"))) {
+        displayMsg = u8("账号已被冻结，请联系管理员解冻。");
+    } else if (message.contains(u8("注销"))) {
+        displayMsg = u8("账号已注销，无法登录。");
+    }
+    uiError(this, u8("登录失败"), displayMsg);
+    loginPage_->setStatus(displayMsg);
+    root_->setCurrentIndex(0);
+    statusBar()->showMessage(u8("登录失败，账号已被封禁或冻结"));
 }
 
 /** 主壳：顶栏 + 内容 + 底部 Tab。页下标映射不变。 */
@@ -979,6 +891,8 @@ QWidget *UserWindow::buildMe()
     logout->setObjectName("ghost");
     connect(logout, &QPushButton::clicked, this, [this] {
         controller_.signOut();
+        controller_.clearCredentials();
+        isAutoLoginAttempt_ = false;
         root_->setCurrentIndex(0);
         loginPage_->setStatus(u8("已安全退出，请重新登录"));
         statusBar()->showMessage(u8("已退出登录"));
@@ -1252,10 +1166,6 @@ bool UserWindow::pickMyLocation()
     addrRow->addWidget(addr, 1);
     addrRow->addWidget(goAddr);
     dialog.body()->addLayout(addrRow);
-    auto *addressChoices = new QComboBox;
-    addressChoices->setVisible(false);
-    prepCombo(addressChoices);
-    dialog.body()->addWidget(addressChoices);
 
     auto *zoomRow = new QHBoxLayout;
     auto *zoomOut = new QPushButton(u8("缩小"));
@@ -1272,7 +1182,7 @@ bool UserWindow::pickMyLocation()
     auto *map = new MapPickLabel;
     map->setAlignment(Qt::AlignCenter);
     map->setMinimumSize(320, 280);
-    map->setCursor(Qt::OpenHandCursor);
+    map->setCursor(Qt::CrossCursor);
     map->setStyleSheet(QStringLiteral(
         "background:#F8FAFC;border:1px solid #E2E8F0;border-radius:12px;color:#64748B;font-size:14px;"));
     map->setText(u8("正在加载地图…"));
@@ -1289,35 +1199,22 @@ bool UserWindow::pickMyLocation()
     double mapCenterLng = pickLng;
     int zoom = 16;
     bool picked = false;
-    int mapRequestSeq = 0;
-    auto *zoomDebounce = new QTimer(&dialog);
-    zoomDebounce->setSingleShot(true);
-    zoomDebounce->setInterval(180);
 
     auto loadMap = [this, map, status, &pickLat, &pickLng,
-                    &mapCenterLat, &mapCenterLng, &zoom, &mapRequestSeq]() {
+                    &mapCenterLat, &mapCenterLng, &zoom]() {
         if (!mapNetwork_ || !map)
             return;
-        const int requestSeq = ++mapRequestSeq;
-        map->setEnabled(false);
+        mapCenterLat = pickLat;
+        mapCenterLng = pickLng;
         map->setText(u8("正在加载地图…"));
         auto *reply = mapNetwork_->get(
-            TencentApi::request(TencentApi::pickerMapUrl(mapCenterLat, mapCenterLng, zoom)));
+            TencentApi::request(TencentApi::pickerMapUrl(pickLat, pickLng, zoom)));
         const QPointer<MapPickLabel> guard(map);
-        connect(reply, &QNetworkReply::finished, this,
-                [this, reply, guard, status, &pickLat, &pickLng,
-                 &mapCenterLat, &mapCenterLng, &zoom, &mapRequestSeq, requestSeq] {
-            if (!guard || requestSeq != mapRequestSeq) {
-                reply->deleteLater();
-                return;
-            }
-            guard->setEnabled(true);
+        connect(reply, &QNetworkReply::finished, this, [reply, guard, status] {
             if (guard) {
                 QPixmap pix;
                 if (reply->error() == QNetworkReply::NoError && pix.loadFromData(reply->readAll())) {
-                    guard->setMapPixmap(pix);
-                    guard->setMapState(mapCenterLat, mapCenterLng, zoom,
-                                       pickLat, pickLng, nearbyStations_);
+                    guard->setPixmap(pix);
                     guard->setText(QString());
                 } else if (status) {
                     status->setText(u8("地图加载失败，仍可填写住址后点「定位到此处」。"));
@@ -1329,50 +1226,23 @@ bool UserWindow::pickMyLocation()
 
     map->onClick = [map, status, &pickLat, &pickLng,
                     &mapCenterLat, &mapCenterLng, &zoom, &picked](QPoint pos) {
-        const QSize mapSize = map->mapImageSize();
-        if (mapSize.isEmpty())
+        const QPixmap pm = map->pixmap(Qt::ReturnByValue);
+        if (pm.isNull() || pm.width() <= 0)
             return;
-        const int x0 = (map->width() - mapSize.width()) / 2;
-        const int y0 = (map->height() - mapSize.height()) / 2;
+        const int x0 = (map->width() - pm.width()) / 2;
+        const int y0 = (map->height() - pm.height()) / 2;
         const double px = pos.x() - x0;
         const double py = pos.y() - y0;
-        if (px < 0 || py >= mapSize.height() || py < 0 || px >= mapSize.width())
+        if (px < 0 || py >= pm.height() || py < 0 || px >= pm.width())
             return;
         TencentApi::centeredMapPixelToLatLng(mapCenterLat, mapCenterLng, zoom,
-                                             px, py, mapSize.width(), mapSize.height(),
+                                             px, py, pm.width(), pm.height(),
                                              &pickLat, &pickLng);
         picked = validCoordinate(pickLat, pickLng);
-        if (picked)
-            map->setSelectedPoint(pickLat, pickLng);
         if (picked && status)
-            status->setText(u8("当前选中：%1, %2。拖动地图可查看周边，绿点为充电站。")
+            status->setText(u8("已选点：%1, %2  可再点一次微调，或点确定。")
                                 .arg(pickLat, 0, 'f', 5)
                                 .arg(pickLng, 0, 'f', 5));
-    };
-
-    map->onPan = [map, &mapCenterLat, &mapCenterLng, &zoom, loadMap](QPoint delta) {
-        double newLat = mapCenterLat;
-        double newLng = mapCenterLng;
-        const QSize mapSize = map->mapImageSize();
-        const int width = mapSize.isEmpty() ? 640 : mapSize.width();
-        const int height = mapSize.isEmpty() ? 480 : mapSize.height();
-        TencentApi::centeredMapPixelToLatLng(
-            mapCenterLat, mapCenterLng, zoom,
-            width / 2.0 - delta.x(), height / 2.0 - delta.y(), width, height,
-            &newLat, &newLng);
-        mapCenterLat = newLat;
-        mapCenterLng = newLng;
-        loadMap();
-    };
-
-    connect(zoomDebounce, &QTimer::timeout, this, loadMap);
-    map->onZoom = [map, &zoom, zoomDebounce](int steps) {
-        const int next = qBound(12, zoom + steps, 18);
-        if (next != zoom) {
-            zoom = next;
-            map->previewZoom(steps);
-            zoomDebounce->start();
-        }
     };
 
     connect(zoomIn, &QPushButton::clicked, this, [&zoom, loadMap] {
@@ -1387,68 +1257,36 @@ bool UserWindow::pickMyLocation()
             loadMap();
         }
     });
-    connect(addressChoices, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            [addressChoices, map, status, &pickLat, &pickLng,
-             &mapCenterLat, &mapCenterLng, &picked, loadMap](int index) {
-        if (index <= 0)
-            return;
-        const QJsonObject choice = addressChoices->itemData(index).toJsonObject();
-        const QStringList coordinate = choice.value("location").toString().split(',');
-        if (coordinate.size() != 2)
-            return;
-        pickLng = coordinate.at(0).toDouble();
-        pickLat = coordinate.at(1).toDouble();
-        picked = validCoordinate(pickLat, pickLng);
-        if (!picked)
-            return;
-        mapCenterLat = pickLat;
-        mapCenterLng = pickLng;
-        map->setSelectedPoint(pickLat, pickLng);
-        status->setText(u8("已选择：") + addressChoices->currentText()
-                        + u8("（%1, %2）").arg(pickLat, 0, 'f', 5).arg(pickLng, 0, 'f', 5));
-        loadMap();
-    });
-    connect(goAddr, &QPushButton::clicked, this,
-            [this, addr, addressChoices, goAddr, status] {
+    connect(goAddr, &QPushButton::clicked, this, [this, addr, status, &pickLat, &pickLng, &picked, loadMap] {
         const QString text = addr->text().trimmed();
         if (text.isEmpty()) {
             status->setText(u8("请先填写住址或地标。"));
             return;
         }
         status->setText(u8("正在解析地址…"));
-        goAddr->setEnabled(false);
-        addressChoices->clear();
-        addressChoices->setVisible(false);
-        auto *reply = mapNetwork_->get(TencentApi::request(
-            TencentApi::signedUrl(QStringLiteral("/v3/geocode/geo"),
-                                  {{QStringLiteral("address"), text}})));
-        const QPointer<QComboBox> choicesGuard(addressChoices);
-        const QPointer<QPushButton> buttonGuard(goAddr);
-        const QPointer<QLabel> statusGuard(status);
+        QUrl nom(QStringLiteral("https://nominatim.openstreetmap.org/search"));
+        QUrlQuery q;
+        q.addQueryItem(QStringLiteral("q"), text);
+        q.addQueryItem(QStringLiteral("format"), QStringLiteral("json"));
+        q.addQueryItem(QStringLiteral("limit"), QStringLiteral("1"));
+        nom.setQuery(q);
+        auto *reply = mapNetwork_->get(TencentApi::request(nom));
         connect(reply, &QNetworkReply::finished, this,
-                [reply, choicesGuard, buttonGuard, statusGuard] {
-                    const QJsonObject body = QJsonDocument::fromJson(reply->readAll()).object();
+                [reply, status, &pickLat, &pickLng, &picked, loadMap, text] {
+                    const QJsonArray hits = QJsonDocument::fromJson(reply->readAll()).array();
                     reply->deleteLater();
-                    if (buttonGuard)
-                        buttonGuard->setEnabled(true);
-                    if (!choicesGuard || !statusGuard)
-                        return;
-                    const QJsonArray hits = body.value("geocodes").toArray();
-                    if (body.value("status").toString() != QLatin1String("1") || hits.isEmpty()) {
-                        statusGuard->setText(u8("没找到匹配地址，请换个更完整的写法。"));
+                    if (hits.isEmpty()) {
+                        status->setText(u8("没找到该地址，请换个写法或直接点地图。"));
                         return;
                     }
-                    choicesGuard->addItem(u8("请选择匹配的位置…"));
-                    for (const QJsonValue &value : hits) {
-                        const QJsonObject hit = value.toObject();
-                        const QString label = hit.value("formatted_address").toString();
-                        if (!label.isEmpty() && !hit.value("location").toString().isEmpty())
-                            choicesGuard->addItem(label, hit);
-                    }
-                    choicesGuard->setCurrentIndex(0);
-                    choicesGuard->setVisible(choicesGuard->count() > 1);
-                    statusGuard->setText(u8("找到 %1 个候选位置，请在上方列表中选择。")
-                                             .arg(choicesGuard->count() - 1));
+                    const QJsonObject first = hits.first().toObject();
+                    pickLat = first.value(QStringLiteral("lat")).toString().toDouble();
+                    pickLng = first.value(QStringLiteral("lon")).toString().toDouble();
+                    picked = validCoordinate(pickLat, pickLng);
+                    status->setText(picked ? u8("已定位到：%1，可再点地图微调。").arg(text)
+                                           : u8("地址坐标无效，请点地图。"));
+                    if (picked)
+                        loadMap();
                 });
     });
 
@@ -1608,7 +1446,6 @@ void UserWindow::fetchLocalWeather()
 /** 画附近电站卡片。 */
 void UserWindow::renderStations(const QJsonObject &data)
 {
-    nearbyStations_ = data.value("stations").toArray();
     const auto loc = data.value("location").toObject();
     locLat_ = loc.value("lat").toDouble(locLat_);
     locLng_ = loc.value("lng").toDouble(locLng_);
@@ -2253,6 +2090,22 @@ void UserWindow::onResp(QJsonObject obj)
     if (code != 0) {
         const QString msg = obj.value("message").toString();
         loginPage_->setStatus(msg.isEmpty() ? u8("请求失败") : msg);
+
+        // 自动登录失败时静默处理
+        if (isAutoLoginAttempt_ && (type == "LOGIN" || type == "REGISTER")) {
+            isAutoLoginAttempt_ = false;
+            controller_.clearCredentials();
+            loginPage_->setStatus(u8("自动登录失败，请手动登录"));
+            root_->setCurrentIndex(0);
+            return;
+        }
+
+        // 检查是否是封禁/冻结（403已经在controller里处理了）
+        if (code == 403 && (type == "LOGIN" || type == "REGISTER")) {
+            // controller已经处理了，这里不再重复
+            return;
+        }
+
         uiWarn(this, u8("提示"), msg.isEmpty() ? (type + u8(" 失败")) : msg);
         // 只有登录/注册失败才停在登录页；进首页后的接口失败不得把人踢回去
         if (type == "LOGIN" || type == "REGISTER") {
@@ -2262,10 +2115,17 @@ void UserWindow::onResp(QJsonObject obj)
         return;
     }
     const QJsonObject data = obj.value("data").toObject();
+
+    // 登录/注册成功后清除自动登录尝试标志
     if (type == "LOGIN" || type == "REGISTER") {
+        isAutoLoginAttempt_ = false;
+        // 如果登录成功且用户勾选了"记住我"，凭证已在调用时保存
         showShell();
         applyUser(controller_.user());
-    } else if (type == "CLOSE_ACCOUNT") {
+        return;
+    }
+
+    if (type == "CLOSE_ACCOUNT") {
         locLat_ = 39.9644;
         locLng_ = 116.3473;
         useGps_ = false;
