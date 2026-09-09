@@ -31,11 +31,19 @@ public:
     void beginCharge(int pileId);
     void signOut();
 
+    // 自动登录相关
+    void saveCredentials(const QString &phone, const QString &password);
+    bool loadCredentials(QString &phone, QString &password);
+    bool isAutoLoginValid() const;
+    void clearCredentials();
+
 signals:
     void connected();
     void responded(QJsonObject obj);
     void failed(QString message);
     void chargeStartBlocked(QJsonObject order);
+    void sessionExpired();
+    void accountBlocked(QString message);
 
 private:
     Client client_;
