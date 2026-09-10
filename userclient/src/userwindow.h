@@ -54,7 +54,7 @@ private slots:
     void startLocate();
     /** 调 Windows 定位服务（Wi-Fi/系统定位）。 */
     void tryWindowsLocate();
-    /** Ubuntu/虚拟机使用公网 IP 获取城市级参考位置，全程不弹窗。 */
+    /** 公网 IP 城市级定位兜底；Ubuntu/虚拟机默认直接使用良乡校区。 */
     void fetchLocationByIP();
     /** 在地图上点选当前位置；确定则按该点找桩。 */
     bool pickMyLocation();
@@ -67,7 +67,7 @@ private slots:
     void onResp(QJsonObject obj);
 
 private:
-    /** 当前定位 {lat,lng}，给找站和导航。默认北京演示点。 */
+    /** 当前定位 {lat,lng}，给找站和导航。默认北京理工大学良乡校区。 */
     QJsonObject coord() const;
     /** 用控制器中的用户快照刷新顶栏余额和头像。 */
     void applyUser(const QJsonObject &u);
@@ -168,8 +168,8 @@ private:
     QLineEdit *addrEdit_ = nullptr;
     QLabel *locMatch_ = nullptr;
     QLabel *weatherHint_ = nullptr;
-    double locLat_ = 39.9644;
-    double locLng_ = 116.3473;
+    double locLat_ = 39.728167;
+    double locLng_ = 116.170492;
     bool useGps_ = false;
     bool pendingConsent_ = false;
     QString gpsPlace_;

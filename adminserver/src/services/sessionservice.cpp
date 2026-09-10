@@ -198,8 +198,8 @@ QJsonObject SessionService::publicUser(const QVariantMap &user) const
         {"status", user.value("status").toString()},
         {"createdAt", user.value("created_at").toString()},
         {"address", user.value("address").toString()},
-        {"lat", user.contains("loc_lat") ? user.value("loc_lat").toDouble() : 39.9644},
-        {"lng", user.contains("loc_lng") ? user.value("loc_lng").toDouble() : 116.3473},
+        {"lat", user.contains("loc_lat") ? user.value("loc_lat").toDouble() : 39.728167},
+        {"lng", user.contains("loc_lng") ? user.value("loc_lng").toDouble() : 116.170492},
         {"closeReason", user.value("close_reason").toString()},
         {"closedAt", user.value("closed_at").toString()},
     };

@@ -23,21 +23,25 @@ public:
     /**
      * 把一张 JSON 编成「4 字节大端长度 + UTF-8 正文」，发给对端。
      * 发送端（Client::request、TcpServer 回包/推送）只调用这个静态函数。
+     * @param obj 待发送 JSON 对象。
+     * @return 4 字节大端正文长度与紧随其后的紧凑 JSON 字节。
      */
     static QByteArray pack(const QJsonObject &obj);
 
     /**
      * 把 TCP 刚读到的字节追加进缓冲，并立刻 tryDecode。
      * 可能一次 append 拆出 0 个、1 个或多个完整包。
+     * @param chunk 套接字本次读到的任意长度字节块。
      */
     void append(const QByteArray &chunk);
 
-    /** 缓冲里是否已经有拆好、还没取走的 JSON。 */
+    /** @return ready_ 中是否已有拆好、尚未取走的 JSON。 */
     bool hasPacket() const { return !ready_.isEmpty(); }
 
     /**
      * 取出队列最前面一张完整 JSON。
      * 没有包时返回空对象；调用方应先看 hasPacket()。
+     * @return FIFO 队首 JSON；无包返回空对象。
      */
     QJsonObject nextPacket();
 
@@ -48,6 +52,7 @@ private:
     /**
      * 循环：缓冲 ≥4 字节就读长度；0 或 >1MB 则清空（防坏帧）；
      * 正文够了就 fromJson，是对象才入队。半包则停，等下次 append。
+     * 无输入输出；结果写入 ready_，未完整数据保留在 buf_。
      */
     void tryDecode();
 };

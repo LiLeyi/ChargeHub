@@ -420,8 +420,8 @@ private:
             reloadTimer_->start();
     }
 
-    double viewLat_ = 39.9644;
-    double viewLng_ = 116.3473;
+    double viewLat_ = 39.728167;
+    double viewLng_ = 116.170492;
     int zoom_ = 15;
     QVector<MapPin> pins_;
     QPixmap mosaic_;
@@ -1270,10 +1270,13 @@ void UserWindow::applyUser(const QJsonObject &u)
 {
     const double bal = u.value("balance").toDouble();
     headBal_->setText(u8("余额 ¥") + QString::number(bal, 'f', 2));
-    if (u.contains("lat"))
-        locLat_ = u.value("lat").toDouble(locLat_);
-    if (u.contains("lng"))
-        locLng_ = u.value("lng").toDouble(locLng_);
+    const double savedLat = u.value("lat").toDouble(locLat_);
+    const double savedLng = u.value("lng").toDouble(locLng_);
+    const bool isOldDefault = u.value("address").toString().trimmed().isEmpty()
+                              && qAbs(savedLat - 39.9644) < 0.000001
+                              && qAbs(savedLng - 116.3473) < 0.000001;
+    locLat_ = isOldDefault ? 39.728167 : savedLat;
+    locLng_ = isOldDefault ? 116.170492 : savedLng;
     if (addrEdit_ && addrEdit_->text().trimmed().isEmpty() && !u.value("address").toString().isEmpty())
         addrEdit_->setText(u.value("address").toString());
     refreshMe();
@@ -1322,8 +1325,8 @@ void UserWindow::startLocate()
     tryWindowsLocate();
 #else
     if (locMatch_)
-        locMatch_->setText(u8("正在通过 IP 获取虚拟机的城市级位置…"));
-    fetchLocationByIP();
+        locMatch_->setText(u8("已使用默认位置：北京理工大学良乡校区"));
+    applyGpsFix(39.728167, 116.170492, u8("北京理工大学良乡校区（默认）"));
 #endif
 }
 
@@ -1395,19 +1398,11 @@ void UserWindow::fetchLocationByIP()
         return;
     }
 
-    const auto finish = [this](const TencentApi::Geo &geo) {
-        if (geo.ok && validCoordinate(geo.lat, geo.lng)) {
-            const QString place = geo.name.isEmpty() ? u8("IP 城市参考点")
-                                                     : u8("IP 城市参考点：") + geo.name;
-            if (locMatch_)
-                locMatch_->setText(u8("已获取") + place);
-            applyGpsFix(geo.lat, geo.lng, place);
-            return;
-        }
-        useGps_ = false;
+    const auto finish = [this](const TencentApi::Geo &) {
+        // 虚拟机中的公网 IP 只能定位到城市，统一回退到项目默认校区。
         if (locMatch_)
-            locMatch_->setText(u8("无法获取自动位置，已使用默认参考点。可手动点击“地图选点”。"));
-        queryStations();
+            locMatch_->setText(u8("已使用默认位置：北京理工大学良乡校区"));
+        applyGpsFix(39.728167, 116.170492, u8("北京理工大学良乡校区（默认）"));
     };
 
     auto *primary = mapNetwork_->get(TencentApi::request(TencentApi::ipLocateUrl()));
@@ -1452,7 +1447,7 @@ bool UserWindow::pickMyLocation()
     dialog.polish(380, 640);
 
     auto *addr = new QLineEdit;
-    addr->setPlaceholderText(u8("住址或地标，例如：北京理工大学中心教学楼"));
+    addr->setPlaceholderText(u8("住址或地标，例如：良乡大学城"));
     if (addrEdit_ && !addrEdit_->text().trimmed().isEmpty())
         addr->setText(addrEdit_->text().trimmed());
     auto *goAddr = new QPushButton(u8("定位到此处"));
@@ -1485,7 +1480,9 @@ bool UserWindow::pickMyLocation()
     map->setFocus();
     dialog.body()->addWidget(map, 1);
 
-    auto *status = new QLabel(u8("拖动地图、滚轮缩放，再点击标定您所在的位置。"));
+    auto *status = new QLabel(useGps_
+                                  ? u8("拖动地图、滚轮缩放，再点击标定您所在的位置。")
+                                  : u8("当前仅为城市级参考范围，请输入附近地标后精确定点。"));
     status->setObjectName("uiSheetHint");
     status->setWordWrap(true);
     dialog.body()->addWidget(status);
@@ -2276,7 +2273,7 @@ void UserWindow::showStationLocation(const QJsonObject &station)
     stZoomRow->addWidget(stZoomHint, 1);
     dialog.body()->addLayout(stZoomRow);
 
-    auto *legend = new QLabel(u8("拖动地图，滚轮缩放。蓝色「我」= 当前位置，红色「桩」= 充电站，两点会留在图上。"));
+    auto *legend = new QLabel(u8("拖动地图，滚轮缩放。蓝色「当前位置」= 当前起点，红色「充电站」= 目的地。"));
     legend->setObjectName("uiSheetHint");
     legend->setWordWrap(true);
     dialog.body()->addWidget(legend);
@@ -2313,7 +2310,7 @@ void UserWindow::showStationLocation(const QJsonObject &station)
                                 .arg(originNow.value("lat").toDouble(), 0, 'f', 5)
                                 .arg(originNow.value("lng").toDouble(), 0, 'f', 5));
     } else {
-        originHint->setText(u8("尚未授权定位。将用当前参考点出发；建议先点「使用我的位置」，再按实际位置导航。"));
+        originHint->setText(u8("尚未取得准确位置。请先用「我的位置」或「地图选点」确认导航起点。"));
     }
     dialog.body()->addWidget(originHint);
 
@@ -2335,11 +2332,11 @@ void UserWindow::showStationLocation(const QJsonObject &station)
         const QJsonObject originNowMap = coord();
         const double fromLat = originNowMap.value("lat").toDouble();
         const double fromLng = originNowMap.value("lng").toDouble();
-        const bool hasUser = validCoordinate(fromLat, fromLng);
+        const bool hasUser = useGps_ && validCoordinate(fromLat, fromLng);
         QVector<MapPin> pins;
         if (hasUser)
-            pins.append({fromLat, fromLng, QColor("#2563EB"), u8("我")});
-        pins.append({lat, lng, QColor("#DC2626"), u8("桩")});
+            pins.append({fromLat, fromLng, QColor("#2563EB"), u8("当前位置")});
+        pins.append({lat, lng, QColor("#DC2626"), u8("充电站")});
         map->setPins(pins);
         const int initZoom = hasUser ? fitZoomForWidget(fromLat, fromLng, lat, lng, QSize(340, 220)) : 15;
         map->setView(hasUser ? (fromLat + lat) / 2.0 : lat,
@@ -2413,6 +2410,11 @@ void UserWindow::showStationLocation(const QJsonObject &station)
         queryTencentRoute(stationCopy, mode->currentData().toString(), routeResult, route);
     });
     auto startNav = [this, stationCopy, mode](bool useOsm) {
+        if (!useGps_) {
+            uiWarn(this, u8("请先确认位置"),
+                   u8("IP 定位只能到城市范围，不能作为导航起点。请先使用系统定位或地图选点。"));
+            return;
+        }
         const QJsonObject origin = coord();
         const double fromLat = origin.value("lat").toDouble();
         const double fromLng = origin.value("lng").toDouble();
@@ -2441,6 +2443,10 @@ void UserWindow::queryTencentRoute(const QJsonObject &station, const QString &mo
 {
     if (!resultLabel || !mapNetwork_)
         return;
+    if (!useGps_) {
+        resultLabel->setText(u8("请先使用系统定位或地图选点确认实际位置，再规划路线。"));
+        return;
+    }
     const QJsonObject origin = coord();
     const double fromLat = origin.value("lat").toDouble();
     const double fromLng = origin.value("lng").toDouble();
@@ -2528,8 +2534,8 @@ void UserWindow::onResp(QJsonObject obj)
         showShell();
         applyUser(controller_.user());
     } else if (type == "CLOSE_ACCOUNT") {
-        locLat_ = 39.9644;
-        locLng_ = 116.3473;
+        locLat_ = 39.728167;
+        locLng_ = 116.170492;
         useGps_ = false;
         gpsPlace_.clear();
         if (addrEdit_)

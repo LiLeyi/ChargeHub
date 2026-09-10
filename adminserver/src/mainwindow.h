@@ -31,6 +31,8 @@ public:
     /**
      * 搭导航和各页表格、接按钮到下面这些槽。
      * dispatch 必须已构造（且 TcpServer 已在听）。
+     * @param dispatch 业务门面，必须非空且生命周期覆盖窗口。
+     * @param parent Qt 父窗口。
      */
     MainWindow(Dispatch *dispatch, QWidget *parent = nullptr);
 
@@ -44,7 +46,7 @@ private slots:
     void rebootPile();
     /** 对选中桩 Dispatch::markPileFault（占用中会先停充）。 */
     void markFault();
-    /** freeze=true 冻结，false 解冻。注销用户 Dispatch 会拒绝。 */
+    /** @param on true 冻结选中用户，false 解冻；注销用户由 Dispatch 拒绝。 */
     void freeze(bool on);
     /** UiSheet 表单：站名/地址/经纬/电价/桩数 → Dispatch::addStation。 */
     void addStation();

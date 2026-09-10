@@ -37,8 +37,8 @@ CREATE TABLE IF NOT EXISTS user (
     status        TEXT    NOT NULL DEFAULT '正常' CHECK (status IN ('正常', '冻结', '注销')),
     created_at    TEXT    NOT NULL,                  -- 注册时间
     address       TEXT    NOT NULL DEFAULT '',       -- 用户选的定位地址文字
-    loc_lat       REAL    NOT NULL DEFAULT 39.9644,  -- 纬度
-    loc_lng       REAL    NOT NULL DEFAULT 116.3473, -- 经度
+    loc_lat       REAL    NOT NULL DEFAULT 39.728167,  -- 纬度，默认北理工良乡校区
+    loc_lng       REAL    NOT NULL DEFAULT 116.170492, -- 经度，默认北理工良乡校区
     close_reason  TEXT    NOT NULL DEFAULT '',       -- 注销原因（界面可留空）
     closed_at     TEXT    NOT NULL DEFAULT ''        -- 注销时间；未注销则为空
 );

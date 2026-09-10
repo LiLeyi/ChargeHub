@@ -23,15 +23,16 @@ static double haversine(double lat1, double lng1, double lat2, double lng2)
 
 struct GeoHit {
     QString name;
-    double lat = 39.9644;
-    double lng = 116.3473;
+    double lat = 39.728167;
+    double lng = 116.170492;
     bool matched = false;
 };
 
 static GeoHit resolveAddress(const QString &raw, const QVector<QVariantMap> &stations)
 {
     const QString t = raw.trimmed();
-    GeoHit best{QString::fromUtf8("北京理工大学（默认）"), 39.9644, 116.3473, false};
+    GeoHit best{QString::fromUtf8("北京理工大学良乡校区（默认）"),
+                39.728167, 116.170492, false};
     if (t.isEmpty())
         return best;
     int score = 0;
@@ -116,12 +117,12 @@ QJsonObject StationService::queryStations(const QVariantMap &user, const QJsonOb
         hit = resolveAddress(address, stations);
     } else if (user.contains("loc_lat")) {
         hit.lat = user.value("loc_lat").toDouble();
-        hit.lng = user.contains("loc_lng") ? user.value("loc_lng").toDouble() : 116.3473;
+        hit.lng = user.contains("loc_lng") ? user.value("loc_lng").toDouble() : 116.170492;
         hit.name = QString::fromUtf8("上次定位");
         hit.matched = true;
     } else if (data.contains("lat") || data.contains("lng")) {
-        hit.lat = data.value("lat").toDouble(39.9644);
-        hit.lng = data.value("lng").toDouble(116.3473);
+        hit.lat = data.value("lat").toDouble(39.728167);
+        hit.lng = data.value("lng").toDouble(116.170492);
         hit.name = QString::fromUtf8("指定坐标");
         hit.matched = true;
     } else {

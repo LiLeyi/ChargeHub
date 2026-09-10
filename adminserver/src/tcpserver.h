@@ -27,6 +27,8 @@ public:
     /**
      * 记住 Dispatch，启动 5 秒推送定时器。
      * 真正开始听端口由 main.cpp 调用 listen(QHostAddress::Any, 8888)。
+     * @param dispatch 请求分发门面，必须非空且比服务器活得更久。
+     * @param parent Qt 父对象。
      */
     TcpServer(Dispatch *dispatch, QObject *parent = nullptr);
 
@@ -35,6 +37,7 @@ protected:
      * 来了一根新 TCP。为本连接建 QTcpSocket + Protocol：
      * readyRead 拆包 → Dispatch::handle → pack 写回；
      * 能从 token 认出用户则 bindUser；disconnected 则可能 scheduleRelease。
+     * @param handle Qt 提供的原生套接字描述符。
      */
     void incomingConnection(qintptr handle) override;
 
@@ -42,12 +45,14 @@ private:
     /**
      * 登录成功或后续请求带了有效 token：记下「这根线属于 userId」。
      * 若该用户正在 60 秒释放倒计时，则取消倒计时（人回来了）。
+     * @param socket 已连接套接字。@param userId 已认证用户主键。
      */
     void bindUser(QTcpSocket *socket, int userId);
 
     /**
      * 这根线断了，且该用户已经没有别的线：启动 60 秒定时器。
      * 到点仍离线 → Dispatch::releaseStaleSession（视同停充）。
+     * @param userId 断开连接所属用户；非正数直接忽略。
      */
     void scheduleRelease(int userId);
 
@@ -60,6 +65,8 @@ private:
     /**
      * 该用户是否还有别的已绑定套接字。
      * except 表示「不要把这根即将断开的线算作在线」。
+     * @param userId 用户主键。@param except 排除的套接字。
+     * @return 找到另一条在线连接时返回 true。
      */
     bool userStillOnline(int userId, QTcpSocket *except = nullptr) const;
 

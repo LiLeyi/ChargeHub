@@ -25,7 +25,7 @@
 
 class Database {
 public:
-    /** 记住库文件路径，此时还不打开文件。path 一般是可执行文件旁 data/chargehub.db。 */
+    /** @param path 库文件路径；仅保存路径，此时不打开文件。 */
     explicit Database(const QString &path);
     /** 关闭当前线程的 QSQLITE 连接并摘掉连接名，避免退出时 Qt 报警。 */
     ~Database();
@@ -40,17 +40,22 @@ public:
     /**
      * 多行 SELECT。args 按顺序绑定 ? 占位符。
      * 每一行变成「列名 → 值」的 QVariantMap。失败或没有行则空向量。
+     * @param sql 带 `?` 占位符的查询语句。
+     * @param args 按出现顺序绑定的参数。
+     * @return 查询结果行；失败与无结果均为空，可用 lastError 辅助区分。
      */
     QVector<QVariantMap> query(const QString &sql, const QVariantList &args = {});
 
     /**
      * 只要第一行。内部调用 query。
      * 没有匹配行时返回空 QVariantMap（调用方用 isEmpty() 判断）。
+     * @param sql 查询语句。@param args 绑定参数。@return 第一行或空 Map。
      */
     QVariantMap one(const QString &sql, const QVariantList &args = {});
 
     /**
      * INSERT / UPDATE / DELETE。
+     * @param sql 写语句。@param args 绑定参数。
      * @return 成功：INSERT 返回 lastInsertId，UPDATE/DELETE 常为 0；失败返回 -1，并写入 lastError_。
      */
     int execute(const QString &sql, const QVariantList &args = {});
@@ -58,6 +63,8 @@ public:
     /**
      * 事务：BEGIN → 跑 fn → fn 返回 true 且 COMMIT 成功才算成功，否则 ROLLBACK。
      * 开充（插单+改桩）、停充、结算（改订单+扣余额）、充值必须走这里。
+     * @param fn 在持锁事务内执行的函数；业务失败应返回 false。
+     * @return 提交成功返回 true；业务失败或数据库错误返回 false。
      */
     bool transaction(const std::function<bool()> &fn);
 

@@ -38,8 +38,8 @@ CREATE TABLE IF NOT EXISTS user (
     status TEXT NOT NULL DEFAULT '正常',
     created_at TEXT NOT NULL,
     address TEXT NOT NULL DEFAULT '',
-    loc_lat REAL NOT NULL DEFAULT 39.9644,
-    loc_lng REAL NOT NULL DEFAULT 116.3473,
+    loc_lat REAL NOT NULL DEFAULT 39.728167,
+    loc_lng REAL NOT NULL DEFAULT 116.170492,
     close_reason TEXT NOT NULL DEFAULT '',
     closed_at TEXT NOT NULL DEFAULT ''
 );
@@ -244,8 +244,11 @@ bool Database::open()
             db.exec(QString("ALTER TABLE user ADD COLUMN %1 %2").arg(QLatin1String(name), QLatin1String(def)));
     };
     addUserCol("address", "TEXT NOT NULL DEFAULT ''");
-    addUserCol("loc_lat", "REAL NOT NULL DEFAULT 39.9644");
-    addUserCol("loc_lng", "REAL NOT NULL DEFAULT 116.3473");
+    addUserCol("loc_lat", "REAL NOT NULL DEFAULT 39.728167");
+    addUserCol("loc_lng", "REAL NOT NULL DEFAULT 116.170492");
+    q.exec("UPDATE user SET loc_lat=39.728167, loc_lng=116.170492 "
+           "WHERE address='' AND ABS(loc_lat-39.9644)<0.000001 "
+           "AND ABS(loc_lng-116.3473)<0.000001");
     addUserCol("close_reason", "TEXT NOT NULL DEFAULT ''");
     addUserCol("closed_at", "TEXT NOT NULL DEFAULT ''");
     q.exec("PRAGMA table_info(station_review)");
