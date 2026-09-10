@@ -4,7 +4,6 @@
 
 #include <QCheckBox>
 #include <QFrame>
-#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -15,17 +14,6 @@
 
 namespace {
 QString u8(const char *text) { return QString::fromUtf8(text); }
-
-QPushButton *makeAuthTab(const QString &text)
-{
-    auto *b = new QPushButton(text);
-    b->setObjectName(QStringLiteral("authTab"));
-    b->setCheckable(true);
-    b->setAutoExclusive(true);
-    b->setCursor(Qt::PointingHandCursor);
-    b->setFocusPolicy(Qt::NoFocus);
-    return b;
-}
 }
 
 LoginPage::LoginPage(QWidget *parent) : QWidget(parent)
@@ -60,28 +48,9 @@ LoginPage::LoginPage(QWidget *parent) : QWidget(parent)
     form->setContentsMargins(20, 14, 20, 16);
     form->setSpacing(6);
 
-    hostEdit_ = new QLineEdit;
     QSettings settings(QStringLiteral("ChargeHub"), QStringLiteral("UserClient"));
-    hostEdit_->setText(settings.value(QStringLiteral("server"), QStringLiteral("127.0.0.1:8888")).toString());
-    hostEdit_->setPlaceholderText(u8("服务器  127.0.0.1:8888"));
-    auto *connectButton = new QPushButton(u8("连接"));
-    connectButton->setObjectName(QStringLiteral("ghost"));
-    connectButton->setMaximumWidth(64);
-    connect(connectButton, &QPushButton::clicked, this, &LoginPage::connectRequested);
-    auto *hostRow = new QHBoxLayout;
-    hostRow->setSpacing(8);
-    hostRow->addWidget(hostEdit_, 1);
-    hostRow->addWidget(connectButton);
-
-    auto *nav = new QFrame;
-    nav->setObjectName(QStringLiteral("authNav"));
-    auto *navLay = new QHBoxLayout(nav);
-    navLay->setContentsMargins(0, 2, 0, 6);
-    navLay->setSpacing(4);
-    loginTab_ = makeAuthTab(u8("登录"));
-    registerTab_ = makeAuthTab(u8("注册"));
-    navLay->addWidget(loginTab_, 1);
-    navLay->addWidget(registerTab_, 1);
+    serverAddress_ = settings.value(QStringLiteral("server"),
+                                    QStringLiteral("127.0.0.1:8888")).toString();
 
     authStack_ = new QStackedWidget;
     auto *loginPage = new QWidget;
@@ -90,7 +59,7 @@ LoginPage::LoginPage(QWidget *parent) : QWidget(parent)
     loginForm->setSpacing(6);
     auto *loginTitle = new QLabel(u8("欢迎回来"));
     loginTitle->setObjectName(QStringLiteral("title"));
-    auto *loginDesc = new QLabel(u8("用已有手机号登录。先连接管理端，再进入找桩。"));
+    auto *loginDesc = new QLabel(u8("用已有手机号登录，进入找桩。"));
     loginDesc->setObjectName(QStringLiteral("muted"));
     loginDesc->setWordWrap(true);
     loginPhoneEdit_ = new QLineEdit(QStringLiteral("13800138000"));
@@ -170,20 +139,16 @@ LoginPage::LoginPage(QWidget *parent) : QWidget(parent)
     authStack_->addWidget(loginPage);
     authStack_->addWidget(registerPage);
 
-    statusLabel_ = new QLabel(u8("请先连接服务器"));
+    statusLabel_ = new QLabel(u8("正在连接服务器…"));
     statusLabel_->setObjectName(QStringLiteral("muted"));
     statusLabel_->setWordWrap(true);
 
-    form->addLayout(hostRow);
-    form->addWidget(nav);
     form->addWidget(authStack_, 1);
     form->addWidget(statusLabel_);
 
     root->addWidget(brandPane);
     root->addWidget(formPane, 1);
 
-    connect(loginTab_, &QPushButton::clicked, this, [this] { showAuthPage(0); });
-    connect(registerTab_, &QPushButton::clicked, this, [this] { showAuthPage(1); });
     connect(loginButton_, &QPushButton::clicked, this, &LoginPage::submitLogin);
     connect(registerButton_, &QPushButton::clicked, this, &LoginPage::submitRegistration);
     connect(regPasswordEdit_, &QLineEdit::textChanged, this, &LoginPage::refreshPasswordHints);
@@ -198,8 +163,6 @@ void LoginPage::showAuthPage(int index)
     if (index == 1 && regPhoneEdit_->text().trimmed().isEmpty())
         regPhoneEdit_->setText(loginPhoneEdit_->text().trimmed());
     authStack_->setCurrentIndex(index);
-    loginTab_->setChecked(index == 0);
-    registerTab_->setChecked(index == 1);
     if (loginButton_)
         loginButton_->setDefault(index == 0);
     if (registerButton_)
@@ -229,7 +192,7 @@ quint16 LoginPage::serverPort() const
 
 QString LoginPage::serverAddress() const
 {
-    return hostEdit_ ? hostEdit_->text().trimmed() : QString();
+    return serverAddress_.trimmed();
 }
 
 void LoginPage::setStatus(const QString &message) { statusLabel_->setText(message); }

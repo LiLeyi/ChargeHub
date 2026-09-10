@@ -34,7 +34,7 @@ private:
     bool validateCredentials(QLineEdit *phoneEdit, QLineEdit *passwordEdit, QString *phone,
                              QString *password, bool isRegister);
 
-    QLineEdit *hostEdit_ = nullptr;
+    QString serverAddress_;
     QLineEdit *loginPhoneEdit_ = nullptr;
     QLineEdit *loginPasswordEdit_ = nullptr;
     QLineEdit *regPhoneEdit_ = nullptr;
@@ -43,8 +43,6 @@ private:
     QLabel *statusLabel_ = nullptr;
     QLabel *passwordRules_ = nullptr;
     QStackedWidget *authStack_ = nullptr;
-    QPushButton *loginTab_ = nullptr;
-    QPushButton *registerTab_ = nullptr;
     QPushButton *loginButton_ = nullptr;
     QPushButton *registerButton_ = nullptr;
     QCheckBox *rememberMe_ = nullptr;
