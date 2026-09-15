@@ -1,0 +1,6 @@
+# PyCharm / WSL 解释器：优先用 Spark 发行包自带的 pyspark，不必再 pip。
+# 仅在没有 SPARK_HOME 时才：
+#   pip3 install -r requirements.txt
+pyspark==3.5.5
+py4j==0.10.9.7
+numpy>=1.21

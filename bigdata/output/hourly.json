@@ -1,0 +1,146 @@
+[
+  {
+    "hour": 0,
+    "pred_kwh": 52.325,
+    "hist_kwh": 36.796,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 1,
+    "pred_kwh": 48.171,
+    "hist_kwh": 25.546,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 2,
+    "pred_kwh": 48.423,
+    "hist_kwh": 26.004,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 3,
+    "pred_kwh": 46.995,
+    "hist_kwh": 23.408,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 4,
+    "pred_kwh": 50.072,
+    "hist_kwh": 29.003,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 5,
+    "pred_kwh": 45.614,
+    "hist_kwh": 20.896,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 6,
+    "pred_kwh": 121.989,
+    "hist_kwh": 123.074,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 7,
+    "pred_kwh": 221.49,
+    "hist_kwh": 231.44,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 8,
+    "pred_kwh": 483.567,
+    "hist_kwh": 536.431,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 9,
+    "pred_kwh": 732.024,
+    "hist_kwh": 808.071,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 10,
+    "pred_kwh": 976.338,
+    "hist_kwh": 1073.603,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 11,
+    "pred_kwh": 1090.598,
+    "hist_kwh": 1197.299,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 12,
+    "pred_kwh": 1170.026,
+    "hist_kwh": 1281.103,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 13,
+    "pred_kwh": 1206.164,
+    "hist_kwh": 1300.323,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 14,
+    "pred_kwh": 1263.452,
+    "hist_kwh": 1441.859,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 15,
+    "pred_kwh": 1171.0,
+    "hist_kwh": 1319.07,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 16,
+    "pred_kwh": 1031.897,
+    "hist_kwh": 1148.783,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 17,
+    "pred_kwh": 840.85,
+    "hist_kwh": 923.384,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 18,
+    "pred_kwh": 759.636,
+    "hist_kwh": 830.626,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 19,
+    "pred_kwh": 688.521,
+    "hist_kwh": 755.758,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 20,
+    "pred_kwh": 524.5,
+    "hist_kwh": 569.029,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 21,
+    "pred_kwh": 300.378,
+    "hist_kwh": 320.647,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 22,
+    "pred_kwh": 146.73,
+    "hist_kwh": 149.329,
+    "name": "全网扩样"
+  },
+  {
+    "hour": 23,
+    "pred_kwh": 66.663,
+    "hist_kwh": 67.496,
+    "name": "全网扩样"
+  }
+]

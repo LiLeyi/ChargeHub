@@ -1,0 +1,3351 @@
+{
+  "report": {
+    "model_version": "spark-ensemble-v2",
+    "mae": 1.8031,
+    "rmse": 2.6875,
+    "r2": 0.2709,
+    "lr_mae": 2.0245,
+    "lr_rmse": 2.9495,
+    "sample_n": 220000,
+    "train_n": 175667,
+    "test_n": 44333,
+    "weather": "大数据引擎 HDFS",
+    "created_at": "2026-09-12 16:23:11",
+    "engine": "HDFS",
+    "primary": "GBTRegressor",
+    "baseline": "LinearRegression",
+    "rf_mae": 1.8152,
+    "rf_rmse": 2.7208,
+    "peak_auc": 0.6003,
+    "peak_acc": 0.7422
+  },
+  "kpis": {
+    "sessions": 220000,
+    "stations": 105,
+    "kwh_total": 1281507.99,
+    "fees_total": 1126208.28,
+    "clusters": 4,
+    "engine": "HDFS",
+    "model": "GBTRegressor",
+    "anomalies": 1110,
+    "peak_hour": 14,
+    "peak_auc": 0.6003
+  },
+  "hourly": [
+    {
+      "hour": 0,
+      "pred_kwh": 52.325,
+      "hist_kwh": 36.796,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 1,
+      "pred_kwh": 48.171,
+      "hist_kwh": 25.546,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 2,
+      "pred_kwh": 48.423,
+      "hist_kwh": 26.004,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 3,
+      "pred_kwh": 46.995,
+      "hist_kwh": 23.408,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 4,
+      "pred_kwh": 50.072,
+      "hist_kwh": 29.003,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 5,
+      "pred_kwh": 45.614,
+      "hist_kwh": 20.896,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 6,
+      "pred_kwh": 121.989,
+      "hist_kwh": 123.074,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 7,
+      "pred_kwh": 221.49,
+      "hist_kwh": 231.44,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 8,
+      "pred_kwh": 483.567,
+      "hist_kwh": 536.431,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 9,
+      "pred_kwh": 732.024,
+      "hist_kwh": 808.071,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 10,
+      "pred_kwh": 976.338,
+      "hist_kwh": 1073.603,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 11,
+      "pred_kwh": 1090.598,
+      "hist_kwh": 1197.299,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 12,
+      "pred_kwh": 1170.026,
+      "hist_kwh": 1281.103,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 13,
+      "pred_kwh": 1206.164,
+      "hist_kwh": 1300.323,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 14,
+      "pred_kwh": 1263.452,
+      "hist_kwh": 1441.859,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 15,
+      "pred_kwh": 1171.0,
+      "hist_kwh": 1319.07,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 16,
+      "pred_kwh": 1031.897,
+      "hist_kwh": 1148.783,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 17,
+      "pred_kwh": 840.85,
+      "hist_kwh": 923.384,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 18,
+      "pred_kwh": 759.636,
+      "hist_kwh": 830.626,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 19,
+      "pred_kwh": 688.521,
+      "hist_kwh": 755.758,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 20,
+      "pred_kwh": 524.5,
+      "hist_kwh": 569.029,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 21,
+      "pred_kwh": 300.378,
+      "hist_kwh": 320.647,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 22,
+      "pred_kwh": 146.73,
+      "hist_kwh": 149.329,
+      "name": "全网扩样"
+    },
+    {
+      "hour": 23,
+      "pred_kwh": 66.663,
+      "hist_kwh": 67.496,
+      "name": "全网扩样"
+    }
+  ],
+  "forecasts": [
+    {
+      "name": "全网（Spark）",
+      "horizon_hours": 1,
+      "pred_kwh": 1031.9,
+      "pred_idle": 0,
+      "peak_hour": "14:00-15:00"
+    },
+    {
+      "name": "全网（Spark）",
+      "horizon_hours": 6,
+      "pred_kwh": 4145.78,
+      "pred_idle": 0,
+      "peak_hour": "14:00-15:00"
+    },
+    {
+      "name": "全网（Spark）",
+      "horizon_hours": 24,
+      "pred_kwh": 13087.42,
+      "pred_idle": 0,
+      "peak_hour": "14:00-15:00"
+    }
+  ],
+  "clusters": [
+    {
+      "stationId": "369001",
+      "name": "航空港区迎宾大道·交流充电站1号",
+      "address": "河南省郑州市航空港区迎宾大道",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 21521,
+      "avg_kwh": 5.813,
+      "avg_hrs": 2.813,
+      "avg_fee": 5.084,
+      "avg_hour": 14.07,
+      "device_count": 40,
+      "pca_x": -0.121,
+      "pca_y": 4.598
+    },
+    {
+      "stationId": "474204",
+      "name": "经开区航海东路·直流充电站3号",
+      "address": "河南省郑州市经开区航海东路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 13890,
+      "avg_kwh": 5.785,
+      "avg_hrs": 2.804,
+      "avg_fee": 5.096,
+      "avg_hour": 14.14,
+      "device_count": 36,
+      "pca_x": 0.191,
+      "pca_y": 3.04
+    },
+    {
+      "stationId": "955429",
+      "name": "航空港区迎宾大道·交流充电站2号",
+      "address": "河南省郑州市航空港区迎宾大道",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 12445,
+      "avg_kwh": 5.803,
+      "avg_hrs": 2.806,
+      "avg_fee": 5.156,
+      "avg_hour": 14.07,
+      "device_count": 32,
+      "pca_x": -0.266,
+      "pca_y": 2.726
+    },
+    {
+      "stationId": "228137",
+      "name": "上街区中心路·交直流充电站1号",
+      "address": "河南省郑州市上街区中心路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 6645,
+      "avg_kwh": 5.78,
+      "avg_hrs": 2.822,
+      "avg_fee": 5.095,
+      "avg_hour": 14.12,
+      "device_count": 17,
+      "pca_x": 0.293,
+      "pca_y": 1.229
+    },
+    {
+      "stationId": "878706",
+      "name": "高新区科学大道·交直流充电站10号",
+      "address": "河南省郑州市高新区科学大道",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 5963,
+      "avg_kwh": 5.793,
+      "avg_hrs": 2.852,
+      "avg_fee": 5.138,
+      "avg_hour": 14.03,
+      "device_count": 15,
+      "pca_x": -0.1,
+      "pca_y": 0.741
+    },
+    {
+      "stationId": "250527",
+      "name": "经开区第八大街·交直流充电站1号",
+      "address": "河南省郑州市经开区第八大街",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 5749,
+      "avg_kwh": 5.862,
+      "avg_hrs": 2.836,
+      "avg_fee": 5.096,
+      "avg_hour": 14.14,
+      "device_count": 15,
+      "pca_x": -0.06,
+      "pca_y": 0.737
+    },
+    {
+      "stationId": "944515",
+      "name": "经开区第八大街·交直流充电站8号",
+      "address": "河南省郑州市经开区第八大街",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 5272,
+      "avg_kwh": 5.809,
+      "avg_hrs": 2.82,
+      "avg_fee": 5.092,
+      "avg_hour": 14.14,
+      "device_count": 14,
+      "pca_x": 0.21,
+      "pca_y": 0.909
+    },
+    {
+      "stationId": "207262",
+      "name": "郑东新区金水东路·交直流充电站1号",
+      "address": "河南省郑州市郑东新区金水东路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 5204,
+      "avg_kwh": 5.81,
+      "avg_hrs": 2.857,
+      "avg_fee": 5.116,
+      "avg_hour": 14.06,
+      "device_count": 13,
+      "pca_x": -0.022,
+      "pca_y": 0.463
+    },
+    {
+      "stationId": "664306",
+      "name": "二七区淮河路·交直流充电站4号",
+      "address": "河南省郑州市二七区淮河路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 4454,
+      "avg_kwh": 5.833,
+      "avg_hrs": 2.826,
+      "avg_fee": 5.053,
+      "avg_hour": 14.06,
+      "device_count": 12,
+      "pca_x": 0.105,
+      "pca_y": 0.664
+    },
+    {
+      "stationId": "987396",
+      "name": "航空港区长安路·直流充电站3号",
+      "address": "河南省郑州市航空港区长安路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 4253,
+      "avg_kwh": 5.815,
+      "avg_hrs": 2.852,
+      "avg_fee": 5.086,
+      "avg_hour": 14.21,
+      "device_count": 11,
+      "pca_x": 0.4,
+      "pca_y": 0.221
+    },
+    {
+      "stationId": "219054",
+      "name": "金水区北三环·直流充电站1号",
+      "address": "河南省郑州市金水区北三环",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 4217,
+      "avg_kwh": 5.889,
+      "avg_hrs": 2.817,
+      "avg_fee": 5.188,
+      "avg_hour": 14.13,
+      "device_count": 11,
+      "pca_x": -0.592,
+      "pca_y": 0.651
+    },
+    {
+      "stationId": "728918",
+      "name": "郑东新区金水东路·交直流充电站6号",
+      "address": "河南省郑州市郑东新区金水东路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 4209,
+      "avg_kwh": 5.805,
+      "avg_hrs": 2.848,
+      "avg_fee": 5.082,
+      "avg_hour": 14.12,
+      "device_count": 11,
+      "pca_x": 0.269,
+      "pca_y": 0.327
+    },
+    {
+      "stationId": "371335",
+      "name": "高新区科学大道·交直流充电站2号",
+      "address": "河南省郑州市高新区科学大道",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 4187,
+      "avg_kwh": 5.765,
+      "avg_hrs": 2.831,
+      "avg_fee": 5.068,
+      "avg_hour": 14.21,
+      "device_count": 11,
+      "pca_x": 0.682,
+      "pca_y": 0.54
+    },
+    {
+      "stationId": "366832",
+      "name": "航空港区长安路·直流充电站2号",
+      "address": "河南省郑州市航空港区长安路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 3601,
+      "avg_kwh": 5.9,
+      "avg_hrs": 2.825,
+      "avg_fee": 5.29,
+      "avg_hour": 14.14,
+      "device_count": 9,
+      "pca_x": -1.023,
+      "pca_y": 0.409
+    },
+    {
+      "stationId": "902592",
+      "name": "二七区嵩山路·交直流充电站4号",
+      "address": "河南省郑州市二七区嵩山路",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 3444,
+      "avg_kwh": 5.845,
+      "avg_hrs": 2.817,
+      "avg_fee": 5.119,
+      "avg_hour": 14.05,
+      "device_count": 9,
+      "pca_x": -0.25,
+      "pca_y": 0.559
+    },
+    {
+      "stationId": "489543",
+      "name": "二七区淮河路·交直流充电站1号",
+      "address": "河南省郑州市二七区淮河路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 3351,
+      "avg_kwh": 5.878,
+      "avg_hrs": 2.81,
+      "avg_fee": 5.153,
+      "avg_hour": 14.12,
+      "device_count": 8,
+      "pca_x": -0.414,
+      "pca_y": 0.567
+    },
+    {
+      "stationId": "638536",
+      "name": "二七区淮河路·交直流充电站3号",
+      "address": "河南省郑州市二七区淮河路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 3243,
+      "avg_kwh": 5.874,
+      "avg_hrs": 2.868,
+      "avg_fee": 5.125,
+      "avg_hour": 14.14,
+      "device_count": 9,
+      "pca_x": -0.189,
+      "pca_y": -0.231
+    },
+    {
+      "stationId": "569886",
+      "name": "二七区淮河路·交直流充电站2号",
+      "address": "河南省郑州市二七区淮河路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 3241,
+      "avg_kwh": 5.897,
+      "avg_hrs": 2.862,
+      "avg_fee": 5.14,
+      "avg_hour": 14.11,
+      "device_count": 9,
+      "pca_x": -0.419,
+      "pca_y": -0.163
+    },
+    {
+      "stationId": "280221",
+      "name": "经开区第八大街·交直流充电站2号",
+      "address": "河南省郑州市经开区第八大街",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 3220,
+      "avg_kwh": 5.839,
+      "avg_hrs": 2.822,
+      "avg_fee": 5.099,
+      "avg_hour": 14.01,
+      "device_count": 8,
+      "pca_x": -0.216,
+      "pca_y": 0.484
+    },
+    {
+      "stationId": "875343",
+      "name": "惠济区天河路·交流充电站1号",
+      "address": "河南省郑州市惠济区天河路",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 3190,
+      "avg_kwh": 5.767,
+      "avg_hrs": 2.809,
+      "avg_fee": 5.047,
+      "avg_hour": 14.09,
+      "device_count": 8,
+      "pca_x": 0.514,
+      "pca_y": 0.667
+    },
+    {
+      "stationId": "414088",
+      "name": "二七区嵩山路·交直流充电站2号",
+      "address": "河南省郑州市二七区嵩山路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 3186,
+      "avg_kwh": 5.791,
+      "avg_hrs": 2.778,
+      "avg_fee": 5.094,
+      "avg_hour": 14.15,
+      "device_count": 8,
+      "pca_x": 0.296,
+      "pca_y": 1.017
+    },
+    {
+      "stationId": "653450",
+      "name": "上街区中心路·交直流充电站3号",
+      "address": "河南省郑州市上街区中心路",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 3054,
+      "avg_kwh": 5.844,
+      "avg_hrs": 2.835,
+      "avg_fee": 5.096,
+      "avg_hour": 14.07,
+      "device_count": 8,
+      "pca_x": -0.09,
+      "pca_y": 0.232
+    },
+    {
+      "stationId": "801274",
+      "name": "经开区第八大街·交直流充电站7号",
+      "address": "河南省郑州市经开区第八大街",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 3035,
+      "avg_kwh": 5.926,
+      "avg_hrs": 2.828,
+      "avg_fee": 5.214,
+      "avg_hour": 14.07,
+      "device_count": 8,
+      "pca_x": -0.989,
+      "pca_y": 0.241
+    },
+    {
+      "stationId": "405157",
+      "name": "经开区第八大街·交直流充电站4号",
+      "address": "河南省郑州市经开区第八大街",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 2838,
+      "avg_kwh": 5.853,
+      "avg_hrs": 2.836,
+      "avg_fee": 5.077,
+      "avg_hour": 14.19,
+      "device_count": 7,
+      "pca_x": 0.2,
+      "pca_y": 0.079
+    },
+    {
+      "stationId": "237105",
+      "name": "高新区梧桐街·超充充电站1号",
+      "address": "河南省郑州市高新区梧桐街",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 2813,
+      "avg_kwh": 5.819,
+      "avg_hrs": 2.9,
+      "avg_fee": 5.059,
+      "avg_hour": 13.98,
+      "device_count": 7,
+      "pca_x": 0.055,
+      "pca_y": -0.601
+    },
+    {
+      "stationId": "738900",
+      "name": "经开区第八大街·交直流充电站6号",
+      "address": "河南省郑州市经开区第八大街",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 2607,
+      "avg_kwh": 5.832,
+      "avg_hrs": 2.806,
+      "avg_fee": 5.091,
+      "avg_hour": 13.99,
+      "device_count": 6,
+      "pca_x": -0.19,
+      "pca_y": 0.571
+    },
+    {
+      "stationId": "355208",
+      "name": "经开区第八大街·交直流充电站3号",
+      "address": "河南省郑州市经开区第八大街",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 2561,
+      "avg_kwh": 5.813,
+      "avg_hrs": 2.872,
+      "avg_fee": 5.119,
+      "avg_hour": 14.11,
+      "device_count": 6,
+      "pca_x": 0.083,
+      "pca_y": -0.342
+    },
+    {
+      "stationId": "874950",
+      "name": "金水区北三环·直流充电站3号",
+      "address": "河南省郑州市金水区北三环",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 2532,
+      "avg_kwh": 5.811,
+      "avg_hrs": 2.796,
+      "avg_fee": 5.217,
+      "avg_hour": 14.08,
+      "device_count": 6,
+      "pca_x": -0.435,
+      "pca_y": 0.681
+    },
+    {
+      "stationId": "932939",
+      "name": "二七区淮河路·交直流充电站5号",
+      "address": "河南省郑州市二七区淮河路",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 2528,
+      "avg_kwh": 5.892,
+      "avg_hrs": 2.848,
+      "avg_fee": 5.079,
+      "avg_hour": 14.03,
+      "device_count": 6,
+      "pca_x": -0.335,
+      "pca_y": -0.097
+    },
+    {
+      "stationId": "568071",
+      "name": "二七区大学路·直流充电站2号",
+      "address": "河南省郑州市二七区大学路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 2488,
+      "avg_kwh": 5.826,
+      "avg_hrs": 2.841,
+      "avg_fee": 5.121,
+      "avg_hour": 14.24,
+      "device_count": 6,
+      "pca_x": 0.277,
+      "pca_y": -0.053
+    },
+    {
+      "stationId": "129465",
+      "name": "高新区科学大道·交直流充电站1号",
+      "address": "河南省郑州市高新区科学大道",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 2326,
+      "avg_kwh": 5.852,
+      "avg_hrs": 2.837,
+      "avg_fee": 5.106,
+      "avg_hour": 14.14,
+      "device_count": 6,
+      "pca_x": -0.014,
+      "pca_y": -0.003
+    },
+    {
+      "stationId": "951880",
+      "name": "二七区大学路·直流充电站6号",
+      "address": "河南省郑州市二七区大学路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 2243,
+      "avg_kwh": 5.881,
+      "avg_hrs": 2.795,
+      "avg_fee": 5.194,
+      "avg_hour": 14.17,
+      "device_count": 6,
+      "pca_x": -0.491,
+      "pca_y": 0.489
+    },
+    {
+      "stationId": "562656",
+      "name": "经开区航海东路·直流充电站4号",
+      "address": "河南省郑州市经开区航海东路",
+      "cluster": 3,
+      "label": "慢充短时型",
+      "sessions": 2234,
+      "avg_kwh": 5.968,
+      "avg_hrs": 2.821,
+      "avg_fee": 5.224,
+      "avg_hour": 14.1,
+      "device_count": 6,
+      "pca_x": -1.183,
+      "pca_y": 0.083
+    },
+    {
+      "stationId": "514669",
+      "name": "二七区嵩山路·交直流充电站3号",
+      "address": "河南省郑州市二七区嵩山路",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 2146,
+      "avg_kwh": 5.706,
+      "avg_hrs": 2.813,
+      "avg_fee": 5.051,
+      "avg_hour": 14.09,
+      "device_count": 6,
+      "pca_x": 0.808,
+      "pca_y": 0.47
+    },
+    {
+      "stationId": "803398",
+      "name": "二七区大学路·直流充电站4号",
+      "address": "河南省郑州市二七区大学路",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 2035,
+      "avg_kwh": 5.793,
+      "avg_hrs": 2.841,
+      "avg_fee": 5.112,
+      "avg_hour": 14.02,
+      "device_count": 5,
+      "pca_x": -0.003,
+      "pca_y": 0.027
+    },
+    {
+      "stationId": "517464",
+      "name": "二七区大学路·直流充电站1号",
+      "address": "河南省郑州市二七区大学路",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 2014,
+      "avg_kwh": 5.788,
+      "avg_hrs": 2.841,
+      "avg_fee": 5.067,
+      "avg_hour": 13.96,
+      "device_count": 5,
+      "pca_x": 0.089,
+      "pca_y": 0.057
+    },
+    {
+      "stationId": "445920",
+      "name": "金水区花园路·直流充电站1号",
+      "address": "河南省郑州市金水区花园路",
+      "cluster": 3,
+      "label": "慢充短时型",
+      "sessions": 2008,
+      "avg_kwh": 5.996,
+      "avg_hrs": 2.85,
+      "avg_fee": 5.218,
+      "avg_hour": 14.15,
+      "device_count": 5,
+      "pca_x": -1.145,
+      "pca_y": -0.415
+    },
+    {
+      "stationId": "575971",
+      "name": "高新区梧桐街·超充充电站2号",
+      "address": "河南省郑州市高新区梧桐街",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 1985,
+      "avg_kwh": 5.818,
+      "avg_hrs": 2.878,
+      "avg_fee": 5.073,
+      "avg_hour": 14.0,
+      "device_count": 5,
+      "pca_x": 0.037,
+      "pca_y": -0.495
+    },
+    {
+      "stationId": "549414",
+      "name": "高新区科学大道·交直流充电站4号",
+      "address": "河南省郑州市高新区科学大道",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 1954,
+      "avg_kwh": 5.906,
+      "avg_hrs": 2.841,
+      "avg_fee": 5.19,
+      "avg_hour": 14.07,
+      "device_count": 5,
+      "pca_x": -0.771,
+      "pca_y": -0.144
+    },
+    {
+      "stationId": "507660",
+      "name": "中原区建设路·交直流充电站3号",
+      "address": "河南省郑州市中原区建设路",
+      "cluster": 1,
+      "label": "慢充短时型",
+      "sessions": 1949,
+      "avg_kwh": 5.667,
+      "avg_hrs": 2.806,
+      "avg_fee": 4.954,
+      "avg_hour": 14.16,
+      "device_count": 5,
+      "pca_x": 1.55,
+      "pca_y": 0.506
+    },
+    {
+      "stationId": "995505",
+      "name": "二七区淮河路·交直流充电站6号",
+      "address": "河南省郑州市二七区淮河路",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 1910,
+      "avg_kwh": 5.784,
+      "avg_hrs": 2.838,
+      "avg_fee": 5.015,
+      "avg_hour": 14.07,
+      "device_count": 5,
+      "pca_x": 0.545,
+      "pca_y": -0.006
+    },
+    {
+      "stationId": "425476",
+      "name": "郑东新区金水东路·交直流充电站4号",
+      "address": "河南省郑州市郑东新区金水东路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 1905,
+      "avg_kwh": 5.731,
+      "avg_hrs": 2.784,
+      "avg_fee": 5.123,
+      "avg_hour": 14.18,
+      "device_count": 5,
+      "pca_x": 0.558,
+      "pca_y": 0.728
+    },
+    {
+      "stationId": "569889",
+      "name": "高新区科学大道·交直流充电站5号",
+      "address": "河南省郑州市高新区科学大道",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 1843,
+      "avg_kwh": 5.845,
+      "avg_hrs": 2.814,
+      "avg_fee": 5.194,
+      "avg_hour": 14.01,
+      "device_count": 5,
+      "pca_x": -0.631,
+      "pca_y": 0.292
+    },
+    {
+      "stationId": "594591",
+      "name": "高新区科学大道·交直流充电站7号",
+      "address": "河南省郑州市高新区科学大道",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 1726,
+      "avg_kwh": 5.857,
+      "avg_hrs": 2.834,
+      "avg_fee": 5.181,
+      "avg_hour": 13.92,
+      "device_count": 4,
+      "pca_x": -0.812,
+      "pca_y": 0.038
+    },
+    {
+      "stationId": "920264",
+      "name": "高新区科学大道·交直流充电站11号",
+      "address": "河南省郑州市高新区科学大道",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 1669,
+      "avg_kwh": 5.793,
+      "avg_hrs": 2.82,
+      "avg_fee": 5.058,
+      "avg_hour": 14.07,
+      "device_count": 4,
+      "pca_x": 0.322,
+      "pca_y": 0.182
+    },
+    {
+      "stationId": "758780",
+      "name": "惠济区文化路·直流充电站3号",
+      "address": "河南省郑州市惠济区文化路",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 1606,
+      "avg_kwh": 5.763,
+      "avg_hrs": 2.815,
+      "avg_fee": 5.117,
+      "avg_hour": 13.97,
+      "device_count": 4,
+      "pca_x": 0.007,
+      "pca_y": 0.341
+    },
+    {
+      "stationId": "131897",
+      "name": "二七区嵩山路·交直流充电站1号",
+      "address": "河南省郑州市二七区嵩山路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 1539,
+      "avg_kwh": 5.783,
+      "avg_hrs": 2.889,
+      "avg_fee": 5.031,
+      "avg_hour": 14.24,
+      "device_count": 4,
+      "pca_x": 0.895,
+      "pca_y": -0.849
+    },
+    {
+      "stationId": "572249",
+      "name": "二七区大学路·直流充电站3号",
+      "address": "河南省郑州市二七区大学路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 1537,
+      "avg_kwh": 5.768,
+      "avg_hrs": 2.836,
+      "avg_fee": 4.974,
+      "avg_hour": 14.18,
+      "device_count": 4,
+      "pca_x": 1.024,
+      "pca_y": -0.108
+    },
+    {
+      "stationId": "891421",
+      "name": "二七区大学路·直流充电站5号",
+      "address": "河南省郑州市二七区大学路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 1506,
+      "avg_kwh": 5.827,
+      "avg_hrs": 2.781,
+      "avg_fee": 5.16,
+      "avg_hour": 14.21,
+      "device_count": 4,
+      "pca_x": -0.0,
+      "pca_y": 0.539
+    },
+    {
+      "stationId": "643012",
+      "name": "金水区经三路·交直流充电站1号",
+      "address": "河南省郑州市金水区经三路",
+      "cluster": 3,
+      "label": "慢充短时型",
+      "sessions": 1477,
+      "avg_kwh": 6.101,
+      "avg_hrs": 2.935,
+      "avg_fee": 5.244,
+      "avg_hour": 13.98,
+      "device_count": 4,
+      "pca_x": -2.058,
+      "pca_y": -1.665
+    },
+    {
+      "stationId": "582873",
+      "name": "高新区科学大道·交直流充电站6号",
+      "address": "河南省郑州市高新区科学大道",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 1462,
+      "avg_kwh": 5.762,
+      "avg_hrs": 2.782,
+      "avg_fee": 5.096,
+      "avg_hour": 13.87,
+      "device_count": 4,
+      "pca_x": -0.125,
+      "pca_y": 0.8
+    },
+    {
+      "stationId": "236379",
+      "name": "郑东新区金水东路·交直流充电站2号",
+      "address": "河南省郑州市郑东新区金水东路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 1428,
+      "avg_kwh": 5.837,
+      "avg_hrs": 2.853,
+      "avg_fee": 5.156,
+      "avg_hour": 14.25,
+      "device_count": 4,
+      "pca_x": 0.1,
+      "pca_y": -0.454
+    },
+    {
+      "stationId": "632920",
+      "name": "高新区科学大道·交直流充电站9号",
+      "address": "河南省郑州市高新区科学大道",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 1392,
+      "avg_kwh": 5.753,
+      "avg_hrs": 2.848,
+      "avg_fee": 5.057,
+      "avg_hour": 14.13,
+      "device_count": 4,
+      "pca_x": 0.68,
+      "pca_y": -0.234
+    },
+    {
+      "stationId": "863084",
+      "name": "管城区陇海路·超充充电站1号",
+      "address": "河南省郑州市管城区陇海路",
+      "cluster": 3,
+      "label": "慢充短时型",
+      "sessions": 1308,
+      "avg_kwh": 5.933,
+      "avg_hrs": 2.875,
+      "avg_fee": 5.324,
+      "avg_hour": 14.11,
+      "device_count": 3,
+      "pca_x": -1.336,
+      "pca_y": -0.767
+    },
+    {
+      "stationId": "944575",
+      "name": "郑东新区金水东路·交直流充电站8号",
+      "address": "河南省郑州市郑东新区金水东路",
+      "cluster": 3,
+      "label": "慢充短时型",
+      "sessions": 1301,
+      "avg_kwh": 5.912,
+      "avg_hrs": 2.856,
+      "avg_fee": 5.247,
+      "avg_hour": 14.05,
+      "device_count": 4,
+      "pca_x": -1.048,
+      "pca_y": -0.471
+    },
+    {
+      "stationId": "672450",
+      "name": "中原区建设路·交直流充电站4号",
+      "address": "河南省郑州市中原区建设路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 1297,
+      "avg_kwh": 5.757,
+      "avg_hrs": 2.788,
+      "avg_fee": 5.17,
+      "avg_hour": 14.24,
+      "device_count": 3,
+      "pca_x": 0.368,
+      "pca_y": 0.485
+    },
+    {
+      "stationId": "792421",
+      "name": "中原区建设路·交直流充电站5号",
+      "address": "河南省郑州市中原区建设路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 1248,
+      "avg_kwh": 5.749,
+      "avg_hrs": 2.849,
+      "avg_fee": 4.955,
+      "avg_hour": 14.24,
+      "device_count": 3,
+      "pca_x": 1.355,
+      "pca_y": -0.367
+    },
+    {
+      "stationId": "730023",
+      "name": "中原区西三环·交流充电站2号",
+      "address": "河南省郑州市中原区西三环",
+      "cluster": 3,
+      "label": "慢充短时型",
+      "sessions": 1216,
+      "avg_kwh": 6.023,
+      "avg_hrs": 2.764,
+      "avg_fee": 5.284,
+      "avg_hour": 13.94,
+      "device_count": 3,
+      "pca_x": -2.072,
+      "pca_y": 0.657
+    },
+    {
+      "stationId": "782629",
+      "name": "金水区经三路·交直流充电站3号",
+      "address": "河南省郑州市金水区经三路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 1195,
+      "avg_kwh": 5.923,
+      "avg_hrs": 2.818,
+      "avg_fee": 4.99,
+      "avg_hour": 14.29,
+      "device_count": 3,
+      "pca_x": 0.412,
+      "pca_y": -0.208
+    },
+    {
+      "stationId": "871619",
+      "name": "金水区花园路·直流充电站2号",
+      "address": "河南省郑州市金水区花园路",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 1104,
+      "avg_kwh": 5.733,
+      "avg_hrs": 2.825,
+      "avg_fee": 5.048,
+      "avg_hour": 14.1,
+      "device_count": 3,
+      "pca_x": 0.743,
+      "pca_y": 0.045
+    },
+    {
+      "stationId": "431796",
+      "name": "高新区科学大道·交直流充电站3号",
+      "address": "河南省郑州市高新区科学大道",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 1083,
+      "avg_kwh": 5.728,
+      "avg_hrs": 2.838,
+      "avg_fee": 4.994,
+      "avg_hour": 13.92,
+      "device_count": 3,
+      "pca_x": 0.621,
+      "pca_y": -0.028
+    },
+    {
+      "stationId": "612116",
+      "name": "高新区科学大道·交直流充电站8号",
+      "address": "河南省郑州市高新区科学大道",
+      "cluster": 3,
+      "label": "慢充短时型",
+      "sessions": 1023,
+      "avg_kwh": 5.914,
+      "avg_hrs": 2.856,
+      "avg_fee": 5.434,
+      "avg_hour": 13.9,
+      "device_count": 3,
+      "pca_x": -2.135,
+      "pca_y": -0.407
+    },
+    {
+      "stationId": "280415",
+      "name": "惠济区文化路·直流充电站1号",
+      "address": "河南省郑州市惠济区文化路",
+      "cluster": 3,
+      "label": "慢充短时型",
+      "sessions": 990,
+      "avg_kwh": 5.982,
+      "avg_hrs": 2.872,
+      "avg_fee": 5.32,
+      "avg_hour": 14.13,
+      "device_count": 2,
+      "pca_x": -1.517,
+      "pca_y": -0.866
+    },
+    {
+      "stationId": "260408",
+      "name": "经开区航海东路·直流充电站2号",
+      "address": "河南省郑州市经开区航海东路",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 961,
+      "avg_kwh": 5.831,
+      "avg_hrs": 2.788,
+      "avg_fee": 5.212,
+      "avg_hour": 14.04,
+      "device_count": 2,
+      "pca_x": -0.584,
+      "pca_y": 0.449
+    },
+    {
+      "stationId": "943765",
+      "name": "高新区科学大道·交直流充电站12号",
+      "address": "河南省郑州市高新区科学大道",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 921,
+      "avg_kwh": 5.726,
+      "avg_hrs": 2.796,
+      "avg_fee": 5.034,
+      "avg_hour": 14.12,
+      "device_count": 2,
+      "pca_x": 0.844,
+      "pca_y": 0.375
+    },
+    {
+      "stationId": "200695",
+      "name": "中原区建设路·交直流充电站1号",
+      "address": "河南省郑州市中原区建设路",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 882,
+      "avg_kwh": 5.788,
+      "avg_hrs": 2.82,
+      "avg_fee": 5.2,
+      "avg_hour": 13.99,
+      "device_count": 2,
+      "pca_x": -0.401,
+      "pca_y": 0.091
+    },
+    {
+      "stationId": "191826",
+      "name": "经开区航海东路·直流充电站1号",
+      "address": "河南省郑州市经开区航海东路",
+      "cluster": 3,
+      "label": "慢充短时型",
+      "sessions": 865,
+      "avg_kwh": 5.897,
+      "avg_hrs": 2.819,
+      "avg_fee": 5.381,
+      "avg_hour": 13.96,
+      "device_count": 2,
+      "pca_x": -1.753,
+      "pca_y": 0.018
+    },
+    {
+      "stationId": "500856",
+      "name": "经开区第八大街·交直流充电站5号",
+      "address": "河南省郑州市经开区第八大街",
+      "cluster": 3,
+      "label": "慢充短时型",
+      "sessions": 790,
+      "avg_kwh": 6.062,
+      "avg_hrs": 2.873,
+      "avg_fee": 5.268,
+      "avg_hour": 13.99,
+      "device_count": 2,
+      "pca_x": -1.987,
+      "pca_y": -0.96
+    },
+    {
+      "stationId": "929628",
+      "name": "管城区陇海路·超充充电站2号",
+      "address": "河南省郑州市管城区陇海路",
+      "cluster": 3,
+      "label": "慢充短时型",
+      "sessions": 787,
+      "avg_kwh": 6.012,
+      "avg_hrs": 2.86,
+      "avg_fee": 5.302,
+      "avg_hour": 13.96,
+      "device_count": 2,
+      "pca_x": -1.956,
+      "pca_y": -0.692
+    },
+    {
+      "stationId": "623134",
+      "name": "郑东新区东风东路·交直流充电站3号",
+      "address": "河南省郑州市郑东新区东风东路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 780,
+      "avg_kwh": 5.827,
+      "avg_hrs": 2.826,
+      "avg_fee": 5.237,
+      "avg_hour": 14.27,
+      "device_count": 2,
+      "pca_x": -0.144,
+      "pca_y": -0.226
+    },
+    {
+      "stationId": "911231",
+      "name": "中原区建设路·交直流充电站6号",
+      "address": "河南省郑州市中原区建设路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 771,
+      "avg_kwh": 5.726,
+      "avg_hrs": 2.873,
+      "avg_fee": 5.081,
+      "avg_hour": 14.23,
+      "device_count": 2,
+      "pca_x": 0.949,
+      "pca_y": -0.713
+    },
+    {
+      "stationId": "884707",
+      "name": "高新区瑞达路·直流充电站9号",
+      "address": "河南省郑州市高新区瑞达路",
+      "cluster": 1,
+      "label": "慢充短时型",
+      "sessions": 712,
+      "avg_kwh": 5.565,
+      "avg_hrs": 2.854,
+      "avg_fee": 4.986,
+      "avg_hour": 14.01,
+      "device_count": 2,
+      "pca_x": 1.657,
+      "pca_y": -0.171
+    },
+    {
+      "stationId": "540225",
+      "name": "高新区瑞达路·直流充电站5号",
+      "address": "河南省郑州市高新区瑞达路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 706,
+      "avg_kwh": 5.856,
+      "avg_hrs": 2.771,
+      "avg_fee": 5.096,
+      "avg_hour": 14.29,
+      "device_count": 2,
+      "pca_x": 0.283,
+      "pca_y": 0.41
+    },
+    {
+      "stationId": "711566",
+      "name": "郑东新区金水东路·交直流充电站5号",
+      "address": "河南省郑州市郑东新区金水东路",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 642,
+      "avg_kwh": 5.769,
+      "avg_hrs": 2.905,
+      "avg_fee": 5.141,
+      "avg_hour": 14.01,
+      "device_count": 2,
+      "pca_x": 0.066,
+      "pca_y": -1.083
+    },
+    {
+      "stationId": "787792",
+      "name": "高新区瑞达路·直流充电站7号",
+      "address": "河南省郑州市高新区瑞达路",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 641,
+      "avg_kwh": 5.725,
+      "avg_hrs": 2.836,
+      "avg_fee": 5.147,
+      "avg_hour": 14.08,
+      "device_count": 2,
+      "pca_x": 0.34,
+      "pca_y": -0.155
+    },
+    {
+      "stationId": "914305",
+      "name": "高新区瑞达路·直流充电站10号",
+      "address": "河南省郑州市高新区瑞达路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 601,
+      "avg_kwh": 5.789,
+      "avg_hrs": 2.85,
+      "avg_fee": 5.155,
+      "avg_hour": 14.37,
+      "device_count": 2,
+      "pca_x": 0.606,
+      "pca_y": -0.599
+    },
+    {
+      "stationId": "260781",
+      "name": "中原区建设路·交直流充电站2号",
+      "address": "河南省郑州市中原区建设路",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 584,
+      "avg_kwh": 5.843,
+      "avg_hrs": 2.837,
+      "avg_fee": 5.263,
+      "avg_hour": 14.16,
+      "device_count": 2,
+      "pca_x": -0.543,
+      "pca_y": -0.357
+    },
+    {
+      "stationId": "349635",
+      "name": "上街区中心路·交直流充电站2号",
+      "address": "河南省郑州市上街区中心路",
+      "cluster": 3,
+      "label": "慢充短时型",
+      "sessions": 552,
+      "avg_kwh": 5.941,
+      "avg_hrs": 2.793,
+      "avg_fee": 5.184,
+      "avg_hour": 14.1,
+      "device_count": 2,
+      "pca_x": -0.883,
+      "pca_y": 0.108
+    },
+    {
+      "stationId": "404112",
+      "name": "惠济区文化路·直流充电站2号",
+      "address": "河南省郑州市惠济区文化路",
+      "cluster": 0,
+      "label": "慢充短时型",
+      "sessions": 487,
+      "avg_kwh": 5.845,
+      "avg_hrs": 2.94,
+      "avg_fee": 5.027,
+      "avg_hour": 14.4,
+      "device_count": 1,
+      "pca_x": 1.008,
+      "pca_y": -1.929
+    },
+    {
+      "stationId": "693651",
+      "name": "上街区中心路·交直流充电站4号",
+      "address": "河南省郑州市上街区中心路",
+      "cluster": 2,
+      "label": "慢充短时型",
+      "sessions": 474,
+      "avg_kwh": 5.875,
+      "avg_hrs": 2.823,
+      "avg_fee": 5.19,
+      "avg_hour": 13.92,
+      "device_count": 1,
+      "pca_x": -0.934,
+      "pca_y": -0.104
+    }
+  ],
+  "battery": [
+    {
+      "sessionId": "200000764",
+      "station": "经开区第八大街·交直流充电站4号",
+      "score": 0.694,
+      "level": "需关注",
+      "soc": 22.54,
+      "tmax": 42.0,
+      "v_gap": 0.036,
+      "reason": "充电电流 73.7A"
+    },
+    {
+      "sessionId": "200053918",
+      "station": "经开区第八大街·交直流充电站1号",
+      "score": 0.691,
+      "level": "需关注",
+      "soc": 21.99,
+      "tmax": 43.0,
+      "v_gap": 0.034,
+      "reason": "充电电流 73.7A"
+    },
+    {
+      "sessionId": "200062919",
+      "station": "二七区淮河路·交直流充电站3号",
+      "score": 0.689,
+      "level": "需关注",
+      "soc": 17.7,
+      "tmax": 41.0,
+      "v_gap": 0.034,
+      "reason": "充电电流 73.8A；SOC 17.7%"
+    },
+    {
+      "sessionId": "200031675",
+      "station": "二七区淮河路·交直流充电站2号",
+      "score": 0.688,
+      "level": "需关注",
+      "soc": 20.85,
+      "tmax": 42.0,
+      "v_gap": 0.036,
+      "reason": "充电电流 73.7A"
+    },
+    {
+      "sessionId": "200007474",
+      "station": "航空港区迎宾大道·交流充电站2号",
+      "score": 0.684,
+      "level": "需关注",
+      "soc": 18.43,
+      "tmax": 42.0,
+      "v_gap": 0.034,
+      "reason": "充电电流 73.8A；SOC 18.4%"
+    },
+    {
+      "sessionId": "200007715",
+      "station": "金水区经三路·交直流充电站1号",
+      "score": 0.684,
+      "level": "需关注",
+      "soc": 23.77,
+      "tmax": 42.0,
+      "v_gap": 0.036,
+      "reason": "充电电流 73.7A"
+    },
+    {
+      "sessionId": "200063656",
+      "station": "航空港区迎宾大道·交流充电站2号",
+      "score": 0.684,
+      "level": "需关注",
+      "soc": 15.65,
+      "tmax": 41.0,
+      "v_gap": 0.034,
+      "reason": "充电电流 73.7A；SOC 15.7%"
+    },
+    {
+      "sessionId": "200021528",
+      "station": "航空港区长安路·直流充电站2号",
+      "score": 0.682,
+      "level": "需关注",
+      "soc": 24.91,
+      "tmax": 42.0,
+      "v_gap": 0.036,
+      "reason": "充电电流 73.7A"
+    },
+    {
+      "sessionId": "200024002",
+      "station": "经开区第八大街·交直流充电站2号",
+      "score": 0.681,
+      "level": "需关注",
+      "soc": 22.75,
+      "tmax": 41.0,
+      "v_gap": 0.036,
+      "reason": "充电电流 73.7A"
+    },
+    {
+      "sessionId": "200034166",
+      "station": "惠济区天河路·交流充电站1号",
+      "score": 0.681,
+      "level": "需关注",
+      "soc": 20.5,
+      "tmax": 42.0,
+      "v_gap": 0.034,
+      "reason": "充电电流 73.8A"
+    },
+    {
+      "sessionId": "200014224",
+      "station": "高新区科学大道·交直流充电站10号",
+      "score": 0.676,
+      "level": "需关注",
+      "soc": 15.23,
+      "tmax": 42.0,
+      "v_gap": 0.033,
+      "reason": "充电电流 73.7A；SOC 15.2%"
+    },
+    {
+      "sessionId": "200024641",
+      "station": "金水区经三路·交直流充电站1号",
+      "score": 0.674,
+      "level": "需关注",
+      "soc": 17.18,
+      "tmax": 42.0,
+      "v_gap": 0.033,
+      "reason": "充电电流 73.7A；SOC 17.2%"
+    },
+    {
+      "sessionId": "200044410",
+      "station": "高新区科学大道·交直流充电站4号",
+      "score": 0.67,
+      "level": "需关注",
+      "soc": 19.64,
+      "tmax": 41.0,
+      "v_gap": 0.034,
+      "reason": "充电电流 73.8A；SOC 19.6%"
+    },
+    {
+      "sessionId": "200063684",
+      "station": "航空港区迎宾大道·交流充电站1号",
+      "score": 0.67,
+      "level": "需关注",
+      "soc": 16.17,
+      "tmax": 40.0,
+      "v_gap": 0.036,
+      "reason": "充电电流 73.7A；SOC 16.2%"
+    },
+    {
+      "sessionId": "200073921",
+      "station": "郑东新区金水东路·交直流充电站6号",
+      "score": 0.67,
+      "level": "需关注",
+      "soc": 16.82,
+      "tmax": 42.0,
+      "v_gap": 0.034,
+      "reason": "充电电流 73.8A；SOC 16.8%"
+    },
+    {
+      "sessionId": "100000299",
+      "station": "高新区瑞达路·直流充电站8号",
+      "score": 0.667,
+      "level": "需关注",
+      "soc": 19.08,
+      "tmax": 43.0,
+      "v_gap": 0.033,
+      "reason": "充电电流 73.7A；SOC 19.1%"
+    },
+    {
+      "sessionId": "200042433",
+      "station": "航空港区迎宾大道·交流充电站1号",
+      "score": 0.666,
+      "level": "需关注",
+      "soc": 22.46,
+      "tmax": 42.0,
+      "v_gap": 0.033,
+      "reason": "充电电流 73.7A"
+    },
+    {
+      "sessionId": "200049915",
+      "station": "航空港区迎宾大道·交流充电站2号",
+      "score": 0.665,
+      "level": "需关注",
+      "soc": 20.08,
+      "tmax": 41.0,
+      "v_gap": 0.033,
+      "reason": "充电电流 73.7A"
+    },
+    {
+      "sessionId": "200053190",
+      "station": "高新区科学大道·交直流充电站7号",
+      "score": 0.664,
+      "level": "需关注",
+      "soc": 17.72,
+      "tmax": 39.0,
+      "v_gap": 0.036,
+      "reason": "充电电流 73.7A；SOC 17.7%"
+    },
+    {
+      "sessionId": "200065333",
+      "station": "经开区第八大街·交直流充电站1号",
+      "score": 0.662,
+      "level": "需关注",
+      "soc": 16.55,
+      "tmax": 41.0,
+      "v_gap": 0.033,
+      "reason": "充电电流 73.7A；SOC 16.6%"
+    },
+    {
+      "sessionId": "200068797",
+      "station": "二七区大学路·直流充电站4号",
+      "score": 0.662,
+      "level": "需关注",
+      "soc": 22.53,
+      "tmax": 40.0,
+      "v_gap": 0.034,
+      "reason": "充电电流 73.8A"
+    },
+    {
+      "sessionId": "200048406",
+      "station": "航空港区迎宾大道·交流充电站2号",
+      "score": 0.66,
+      "level": "需关注",
+      "soc": 17.78,
+      "tmax": 41.0,
+      "v_gap": 0.033,
+      "reason": "充电电流 73.7A；SOC 17.8%"
+    },
+    {
+      "sessionId": "200062691",
+      "station": "金水区北三环·直流充电站1号",
+      "score": 0.66,
+      "level": "需关注",
+      "soc": 24.16,
+      "tmax": 41.0,
+      "v_gap": 0.033,
+      "reason": "充电电流 73.7A"
+    },
+    {
+      "sessionId": "200041181",
+      "station": "航空港区迎宾大道·交流充电站1号",
+      "score": 0.659,
+      "level": "需关注",
+      "soc": 18.43,
+      "tmax": 41.0,
+      "v_gap": 0.033,
+      "reason": "充电电流 73.7A；SOC 18.4%"
+    },
+    {
+      "sessionId": "200029932",
+      "station": "二七区大学路·直流充电站6号",
+      "score": 0.659,
+      "level": "需关注",
+      "soc": 19.08,
+      "tmax": 39.0,
+      "v_gap": 0.033,
+      "reason": "充电电流 73.7A；SOC 19.1%"
+    },
+    {
+      "sessionId": "200066395",
+      "station": "经开区第八大街·交直流充电站5号",
+      "score": 0.659,
+      "level": "需关注",
+      "soc": 18.65,
+      "tmax": 42.0,
+      "v_gap": 0.034,
+      "reason": "充电电流 73.8A；SOC 18.6%"
+    },
+    {
+      "sessionId": "200073820",
+      "station": "上街区中心路·交直流充电站1号",
+      "score": 0.658,
+      "level": "需关注",
+      "soc": 25.12,
+      "tmax": 41.0,
+      "v_gap": 0.033,
+      "reason": "充电电流 73.7A"
+    },
+    {
+      "sessionId": "200018091",
+      "station": "上街区中心路·交直流充电站3号",
+      "score": 0.658,
+      "level": "需关注",
+      "soc": 16.22,
+      "tmax": 42.0,
+      "v_gap": 0.033,
+      "reason": "充电电流 73.7A；SOC 16.2%"
+    },
+    {
+      "sessionId": "200059838",
+      "station": "航空港区长安路·直流充电站3号",
+      "score": 0.656,
+      "level": "需关注",
+      "soc": 17.52,
+      "tmax": 42.0,
+      "v_gap": 0.033,
+      "reason": "充电电流 73.7A；SOC 17.5%"
+    },
+    {
+      "sessionId": "200011310",
+      "station": "高新区科学大道·交直流充电站2号",
+      "score": 0.655,
+      "level": "需关注",
+      "soc": 18.63,
+      "tmax": 40.0,
+      "v_gap": 0.033,
+      "reason": "充电电流 73.7A；SOC 18.6%"
+    },
+    {
+      "sessionId": "200064797",
+      "station": "二七区大学路·直流充电站2号",
+      "score": 0.655,
+      "level": "需关注",
+      "soc": 23.99,
+      "tmax": 41.0,
+      "v_gap": 0.036,
+      "reason": "充电电流 73.7A"
+    },
+    {
+      "sessionId": "200000042",
+      "station": "航空港区迎宾大道·交流充电站2号",
+      "score": 0.652,
+      "level": "需关注",
+      "soc": 20.92,
+      "tmax": 39.0,
+      "v_gap": 0.034,
+      "reason": "充电电流 73.7A"
+    },
+    {
+      "sessionId": "200011455",
+      "station": "经开区第八大街·交直流充电站2号",
+      "score": 0.65,
+      "level": "需关注",
+      "soc": 16.03,
+      "tmax": 37.0,
+      "v_gap": 0.036,
+      "reason": "充电电流 73.7A；SOC 16.0%"
+    },
+    {
+      "sessionId": "200013004",
+      "station": "航空港区迎宾大道·交流充电站1号",
+      "score": 0.649,
+      "level": "需关注",
+      "soc": 20.42,
+      "tmax": 39.0,
+      "v_gap": 0.033,
+      "reason": "充电电流 73.7A"
+    },
+    {
+      "sessionId": "200051462",
+      "station": "高新区梧桐街·超充充电站1号",
+      "score": 0.647,
+      "level": "需关注",
+      "soc": 21.23,
+      "tmax": 38.0,
+      "v_gap": 0.034,
+      "reason": "充电电流 73.8A"
+    },
+    {
+      "sessionId": "200052574",
+      "station": "高新区瑞达路·直流充电站5号",
+      "score": 0.646,
+      "level": "需关注",
+      "soc": 15.86,
+      "tmax": 40.0,
+      "v_gap": 0.034,
+      "reason": "充电电流 73.8A；SOC 15.9%"
+    },
+    {
+      "sessionId": "200026325",
+      "station": "高新区科学大道·交直流充电站4号",
+      "score": 0.645,
+      "level": "需关注",
+      "soc": 22.51,
+      "tmax": 42.0,
+      "v_gap": 0.034,
+      "reason": "充电电流 73.8A"
+    },
+    {
+      "sessionId": "200047541",
+      "station": "二七区淮河路·交直流充电站5号",
+      "score": 0.645,
+      "level": "需关注",
+      "soc": 22.3,
+      "tmax": 38.0,
+      "v_gap": 0.036,
+      "reason": "充电电流 73.7A"
+    },
+    {
+      "sessionId": "200072223",
+      "station": "航空港区迎宾大道·交流充电站1号",
+      "score": 0.645,
+      "level": "需关注",
+      "soc": 22.77,
+      "tmax": 43.0,
+      "v_gap": 0.033,
+      "reason": "充电电流 73.7A"
+    },
+    {
+      "sessionId": "200038445",
+      "station": "二七区淮河路·交直流充电站6号",
+      "score": 0.644,
+      "level": "需关注",
+      "soc": 17.61,
+      "tmax": 39.0,
+      "v_gap": 0.033,
+      "reason": "充电电流 73.7A；SOC 17.6%"
+    }
+  ],
+  "alerts": [
+    {
+      "level": "严重",
+      "title": "高峰 1263 kWh",
+      "detail": "",
+      "created_at": "2026-09-12 16:23:11"
+    },
+    {
+      "level": "一般",
+      "title": "异常 1110",
+      "detail": "",
+      "created_at": "2026-09-12 16:23:11"
+    }
+  ],
+  "plan": [
+    {
+      "station": "航空港区迎宾大道·交流充电站1号",
+      "recommend": 5.813,
+      "priority": 1,
+      "reason": "慢充短时型 · 会话 21521 · 建议按簇调度值班",
+      "created_at": "2026-09-12 16:23:11"
+    },
+    {
+      "station": "经开区航海东路·直流充电站3号",
+      "recommend": 5.785,
+      "priority": 2,
+      "reason": "慢充短时型 · 会话 13890 · 建议按簇调度值班",
+      "created_at": "2026-09-12 16:23:11"
+    },
+    {
+      "station": "航空港区迎宾大道·交流充电站2号",
+      "recommend": 5.803,
+      "priority": 3,
+      "reason": "慢充短时型 · 会话 12445 · 建议按簇调度值班",
+      "created_at": "2026-09-12 16:23:11"
+    },
+    {
+      "station": "上街区中心路·交直流充电站1号",
+      "recommend": 5.78,
+      "priority": 4,
+      "reason": "慢充短时型 · 会话 6645 · 建议按簇调度值班",
+      "created_at": "2026-09-12 16:23:11"
+    },
+    {
+      "station": "高新区科学大道·交直流充电站10号",
+      "recommend": 5.793,
+      "priority": 5,
+      "reason": "慢充短时型 · 会话 5963 · 建议按簇调度值班",
+      "created_at": "2026-09-12 16:23:11"
+    },
+    {
+      "station": "经开区第八大街·交直流充电站1号",
+      "recommend": 5.862,
+      "priority": 6,
+      "reason": "慢充短时型 · 会话 5749 · 建议按簇调度值班",
+      "created_at": "2026-09-12 16:23:11"
+    },
+    {
+      "station": "经开区第八大街·交直流充电站8号",
+      "recommend": 5.809,
+      "priority": 7,
+      "reason": "慢充短时型 · 会话 5272 · 建议按簇调度值班",
+      "created_at": "2026-09-12 16:23:11"
+    },
+    {
+      "station": "郑东新区金水东路·交直流充电站1号",
+      "recommend": 5.81,
+      "priority": 8,
+      "reason": "慢充短时型 · 会话 5204 · 建议按簇调度值班",
+      "created_at": "2026-09-12 16:23:11"
+    }
+  ],
+  "heatmap": [
+    {
+      "weekday": "Mon",
+      "hour": 18,
+      "kwh": 10454.5
+    },
+    {
+      "weekday": "Mon",
+      "hour": 15,
+      "kwh": 17812.36
+    },
+    {
+      "weekday": "Wed",
+      "hour": 10,
+      "kwh": 13657.15
+    },
+    {
+      "weekday": "Fri",
+      "hour": 10,
+      "kwh": 14412.69
+    },
+    {
+      "weekday": "Wed",
+      "hour": 0,
+      "kwh": 459.97
+    },
+    {
+      "weekday": "Sat",
+      "hour": 16,
+      "kwh": 14798.93
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 8,
+      "kwh": 66.37
+    },
+    {
+      "weekday": "Sun",
+      "hour": 10,
+      "kwh": 13567.35
+    },
+    {
+      "weekday": "Tues",
+      "hour": 22,
+      "kwh": 5.99
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 9,
+      "kwh": 10815.65
+    },
+    {
+      "weekday": "Sun",
+      "hour": 11,
+      "kwh": 15197.97
+    },
+    {
+      "weekday": "Tues",
+      "hour": 18,
+      "kwh": 10824.77
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 10,
+      "kwh": 13179.5
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 11,
+      "kwh": 14633.64
+    },
+    {
+      "weekday": "Tues",
+      "hour": 10,
+      "kwh": 13925.19
+    },
+    {
+      "weekday": "Tues",
+      "hour": 9,
+      "kwh": 10280.67
+    },
+    {
+      "weekday": "Sun",
+      "hour": 19,
+      "kwh": 9411.28
+    },
+    {
+      "weekday": "Fri",
+      "hour": 0,
+      "kwh": 508.42
+    },
+    {
+      "weekday": "Wed",
+      "hour": 6,
+      "kwh": 1494.44
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 5,
+      "kwh": 249.59
+    },
+    {
+      "weekday": "Tues",
+      "hour": 22,
+      "kwh": 1989.4
+    },
+    {
+      "weekday": "Tues",
+      "hour": 5,
+      "kwh": 331.66
+    },
+    {
+      "weekday": "Tues",
+      "hour": 15,
+      "kwh": 181.67
+    },
+    {
+      "weekday": "Fri",
+      "hour": 15,
+      "kwh": 16420.01
+    },
+    {
+      "weekday": "Fri",
+      "hour": 17,
+      "kwh": 11816.0
+    },
+    {
+      "weekday": "Mon",
+      "hour": 13,
+      "kwh": 17133.12
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 19,
+      "kwh": 136.11
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 11,
+      "kwh": 643.64
+    },
+    {
+      "weekday": "Mon",
+      "hour": 16,
+      "kwh": 14404.17
+    },
+    {
+      "weekday": "Wed",
+      "hour": 15,
+      "kwh": 17456.75
+    },
+    {
+      "weekday": "Tues",
+      "hour": 13,
+      "kwh": 327.72
+    },
+    {
+      "weekday": "Mon",
+      "hour": 12,
+      "kwh": 16293.47
+    },
+    {
+      "weekday": "Mon",
+      "hour": 1,
+      "kwh": 290.06
+    },
+    {
+      "weekday": "Sun",
+      "hour": 21,
+      "kwh": 4232.46
+    },
+    {
+      "weekday": "Sat",
+      "hour": 4,
+      "kwh": 281.41
+    },
+    {
+      "weekday": "Sat",
+      "hour": 12,
+      "kwh": 16075.05
+    },
+    {
+      "weekday": "Mon",
+      "hour": 9,
+      "kwh": 10258.64
+    },
+    {
+      "weekday": "Sat",
+      "hour": 13,
+      "kwh": 15471.92
+    },
+    {
+      "weekday": "Sat",
+      "hour": 14,
+      "kwh": 18732.24
+    },
+    {
+      "weekday": "Sun",
+      "hour": 17,
+      "kwh": 11387.88
+    },
+    {
+      "weekday": "Fri",
+      "hour": 23,
+      "kwh": 902.23
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 12,
+      "kwh": 16202.23
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 20,
+      "kwh": 7173.11
+    },
+    {
+      "weekday": "Tues",
+      "hour": 7,
+      "kwh": 3100.7
+    },
+    {
+      "weekday": "Sun",
+      "hour": 23,
+      "kwh": 755.34
+    },
+    {
+      "weekday": "Fri",
+      "hour": 1,
+      "kwh": 358.98
+    },
+    {
+      "weekday": "Mon",
+      "hour": 22,
+      "kwh": 1974.35
+    },
+    {
+      "weekday": "Fri",
+      "hour": 5,
+      "kwh": 307.69
+    },
+    {
+      "weekday": "Wed",
+      "hour": 2,
+      "kwh": 285.91
+    },
+    {
+      "weekday": "Sun",
+      "hour": 5,
+      "kwh": 246.27
+    },
+    {
+      "weekday": "Fri",
+      "hour": 14,
+      "kwh": 18833.67
+    },
+    {
+      "weekday": "Tues",
+      "hour": 16,
+      "kwh": 461.34
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 13,
+      "kwh": 384.68
+    },
+    {
+      "weekday": "Wed",
+      "hour": 16,
+      "kwh": 14793.19
+    },
+    {
+      "weekday": "Tues",
+      "hour": 20,
+      "kwh": 50.79
+    },
+    {
+      "weekday": "Mon",
+      "hour": 19,
+      "kwh": 9410.93
+    },
+    {
+      "weekday": "Mon",
+      "hour": 20,
+      "kwh": 7277.27
+    },
+    {
+      "weekday": "Tues",
+      "hour": 10,
+      "kwh": 346.64
+    },
+    {
+      "weekday": "Sun",
+      "hour": 15,
+      "kwh": 16641.18
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 19,
+      "kwh": 9963.92
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 8,
+      "kwh": 6808.81
+    },
+    {
+      "weekday": "Sat",
+      "hour": 8,
+      "kwh": 6898.28
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 16,
+      "kwh": 15038.55
+    },
+    {
+      "weekday": "Tues",
+      "hour": 19,
+      "kwh": 9571.07
+    },
+    {
+      "weekday": "Sat",
+      "hour": 21,
+      "kwh": 4001.66
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 22,
+      "kwh": 1867.81
+    },
+    {
+      "weekday": "Sun",
+      "hour": 22,
+      "kwh": 1943.98
+    },
+    {
+      "weekday": "Fri",
+      "hour": 3,
+      "kwh": 341.45
+    },
+    {
+      "weekday": "Fri",
+      "hour": 2,
+      "kwh": 270.23
+    },
+    {
+      "weekday": "Sun",
+      "hour": 2,
+      "kwh": 470.85
+    },
+    {
+      "weekday": "Wed",
+      "hour": 20,
+      "kwh": 7076.73
+    },
+    {
+      "weekday": "Wed",
+      "hour": 18,
+      "kwh": 10967.28
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 15,
+      "kwh": 178.68
+    },
+    {
+      "weekday": "Wed",
+      "hour": 12,
+      "kwh": 16783.74
+    },
+    {
+      "weekday": "Sun",
+      "hour": 3,
+      "kwh": 235.23
+    },
+    {
+      "weekday": "Wed",
+      "hour": 22,
+      "kwh": 1864.32
+    },
+    {
+      "weekday": "Fri",
+      "hour": 9,
+      "kwh": 10297.41
+    },
+    {
+      "weekday": "Fri",
+      "hour": 8,
+      "kwh": 7026.6
+    },
+    {
+      "weekday": "Tues",
+      "hour": 17,
+      "kwh": 11293.68
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 13,
+      "kwh": 16456.93
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 7,
+      "kwh": 3038.28
+    },
+    {
+      "weekday": "Mon",
+      "hour": 6,
+      "kwh": 1592.42
+    },
+    {
+      "weekday": "Sat",
+      "hour": 0,
+      "kwh": 442.55
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 4,
+      "kwh": 430.59
+    },
+    {
+      "weekday": "Mon",
+      "hour": 5,
+      "kwh": 409.81
+    },
+    {
+      "weekday": "Sat",
+      "hour": 1,
+      "kwh": 446.51
+    },
+    {
+      "weekday": "Wed",
+      "hour": 5,
+      "kwh": 109.52
+    },
+    {
+      "weekday": "Fri",
+      "hour": 12,
+      "kwh": 16768.44
+    },
+    {
+      "weekday": "Wed",
+      "hour": 19,
+      "kwh": 9989.58
+    },
+    {
+      "weekday": "Mon",
+      "hour": 17,
+      "kwh": 11893.51
+    },
+    {
+      "weekday": "Mon",
+      "hour": 14,
+      "kwh": 18490.87
+    },
+    {
+      "weekday": "Tues",
+      "hour": 21,
+      "kwh": 23.01
+    },
+    {
+      "weekday": "Mon",
+      "hour": 21,
+      "kwh": 4024.66
+    },
+    {
+      "weekday": "Fri",
+      "hour": 20,
+      "kwh": 7496.23
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 10,
+      "kwh": 384.36
+    },
+    {
+      "weekday": "Tues",
+      "hour": 9,
+      "kwh": 207.7
+    },
+    {
+      "weekday": "Sun",
+      "hour": 6,
+      "kwh": 1523.04
+    },
+    {
+      "weekday": "Mon",
+      "hour": 4,
+      "kwh": 517.97
+    },
+    {
+      "weekday": "Sat",
+      "hour": 23,
+      "kwh": 960.43
+    },
+    {
+      "weekday": "Wed",
+      "hour": 8,
+      "kwh": 7245.31
+    },
+    {
+      "weekday": "Sat",
+      "hour": 11,
+      "kwh": 15324.87
+    },
+    {
+      "weekday": "Tues",
+      "hour": 13,
+      "kwh": 16190.83
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 18,
+      "kwh": 10734.53
+    },
+    {
+      "weekday": "Tues",
+      "hour": 12,
+      "kwh": 16142.81
+    },
+    {
+      "weekday": "Tues",
+      "hour": 11,
+      "kwh": 14783.44
+    },
+    {
+      "weekday": "Sat",
+      "hour": 18,
+      "kwh": 10293.36
+    },
+    {
+      "weekday": "Tues",
+      "hour": 16,
+      "kwh": 14077.46
+    },
+    {
+      "weekday": "Sun",
+      "hour": 20,
+      "kwh": 7323.53
+    },
+    {
+      "weekday": "Tues",
+      "hour": 21,
+      "kwh": 4026.53
+    },
+    {
+      "weekday": "Tues",
+      "hour": 4,
+      "kwh": 369.14
+    },
+    {
+      "weekday": "Mon",
+      "hour": 3,
+      "kwh": 288.14
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 3,
+      "kwh": 264.47
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 1,
+      "kwh": 273.04
+    },
+    {
+      "weekday": "Tues",
+      "hour": 1,
+      "kwh": 303.56
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 18,
+      "kwh": 271.53
+    },
+    {
+      "weekday": "Fri",
+      "hour": 19,
+      "kwh": 10132.84
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 16,
+      "kwh": 546.21
+    },
+    {
+      "weekday": "Fri",
+      "hour": 18,
+      "kwh": 10808.26
+    },
+    {
+      "weekday": "Sat",
+      "hour": 20,
+      "kwh": 7373.88
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 14,
+      "kwh": 130.97
+    },
+    {
+      "weekday": "Tues",
+      "hour": 12,
+      "kwh": 592.69
+    },
+    {
+      "weekday": "Wed",
+      "hour": 11,
+      "kwh": 15873.14
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 12,
+      "kwh": 672.54
+    },
+    {
+      "weekday": "Wed",
+      "hour": 21,
+      "kwh": 4091.24
+    },
+    {
+      "weekday": "Tues",
+      "hour": 19,
+      "kwh": 111.07
+    },
+    {
+      "weekday": "Mon",
+      "hour": 10,
+      "kwh": 13087.94
+    },
+    {
+      "weekday": "Mon",
+      "hour": 0,
+      "kwh": 506.9
+    },
+    {
+      "weekday": "Sun",
+      "hour": 18,
+      "kwh": 10175.44
+    },
+    {
+      "weekday": "Tues",
+      "hour": 0,
+      "kwh": 12.83
+    },
+    {
+      "weekday": "Sun",
+      "hour": 4,
+      "kwh": 365.4
+    },
+    {
+      "weekday": "Sat",
+      "hour": 7,
+      "kwh": 2906.56
+    },
+    {
+      "weekday": "Sat",
+      "hour": 10,
+      "kwh": 14063.49
+    },
+    {
+      "weekday": "Wed",
+      "hour": 9,
+      "kwh": 10176.95
+    },
+    {
+      "weekday": "Sun",
+      "hour": 9,
+      "kwh": 10104.57
+    },
+    {
+      "weekday": "Fri",
+      "hour": 6,
+      "kwh": 1657.0
+    },
+    {
+      "weekday": "Sun",
+      "hour": 8,
+      "kwh": 6584.24
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 21,
+      "kwh": 4128.0
+    },
+    {
+      "weekday": "Mon",
+      "hour": 7,
+      "kwh": 3052.61
+    },
+    {
+      "weekday": "Sun",
+      "hour": 7,
+      "kwh": 2950.46
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 2,
+      "kwh": 343.08
+    },
+    {
+      "weekday": "Wed",
+      "hour": 4,
+      "kwh": 326.84
+    },
+    {
+      "weekday": "Tues",
+      "hour": 23,
+      "kwh": 788.26
+    },
+    {
+      "weekday": "Tues",
+      "hour": 3,
+      "kwh": 384.78
+    },
+    {
+      "weekday": "Mon",
+      "hour": 2,
+      "kwh": 347.58
+    },
+    {
+      "weekday": "Wed",
+      "hour": 17,
+      "kwh": 12149.08
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 20,
+      "kwh": 32.03
+    },
+    {
+      "weekday": "Tues",
+      "hour": 17,
+      "kwh": 452.58
+    },
+    {
+      "weekday": "Tues",
+      "hour": 11,
+      "kwh": 622.45
+    },
+    {
+      "weekday": "Fri",
+      "hour": 11,
+      "kwh": 15363.44
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 9,
+      "kwh": 175.11
+    },
+    {
+      "weekday": "Fri",
+      "hour": 22,
+      "kwh": 1949.9
+    },
+    {
+      "weekday": "Sun",
+      "hour": 1,
+      "kwh": 370.59
+    },
+    {
+      "weekday": "Fri",
+      "hour": 21,
+      "kwh": 4329.81
+    },
+    {
+      "weekday": "Sat",
+      "hour": 9,
+      "kwh": 10409.68
+    },
+    {
+      "weekday": "Mon",
+      "hour": 8,
+      "kwh": 7019.33
+    },
+    {
+      "weekday": "Sun",
+      "hour": 13,
+      "kwh": 16773.18
+    },
+    {
+      "weekday": "Sun",
+      "hour": 16,
+      "kwh": 14288.51
+    },
+    {
+      "weekday": "Tues",
+      "hour": 15,
+      "kwh": 16337.24
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 15,
+      "kwh": 17159.88
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 17,
+      "kwh": 11531.52
+    },
+    {
+      "weekday": "Tues",
+      "hour": 14,
+      "kwh": 18840.05
+    },
+    {
+      "weekday": "Sat",
+      "hour": 6,
+      "kwh": 1726.85
+    },
+    {
+      "weekday": "Mon",
+      "hour": 23,
+      "kwh": 766.96
+    },
+    {
+      "weekday": "Tues",
+      "hour": 6,
+      "kwh": 1642.09
+    },
+    {
+      "weekday": "Wed",
+      "hour": 23,
+      "kwh": 926.88
+    },
+    {
+      "weekday": "Tues",
+      "hour": 0,
+      "kwh": 476.27
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 23,
+      "kwh": 974.49
+    },
+    {
+      "weekday": "Fri",
+      "hour": 4,
+      "kwh": 318.93
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 17,
+      "kwh": 612.01
+    },
+    {
+      "weekday": "Fri",
+      "hour": 13,
+      "kwh": 17444.58
+    },
+    {
+      "weekday": "Tues",
+      "hour": 18,
+      "kwh": 226.7
+    },
+    {
+      "weekday": "Fri",
+      "hour": 16,
+      "kwh": 14982.09
+    },
+    {
+      "weekday": "Tues",
+      "hour": 14,
+      "kwh": 138.17
+    },
+    {
+      "weekday": "Wed",
+      "hour": 13,
+      "kwh": 16846.07
+    },
+    {
+      "weekday": "Wed",
+      "hour": 14,
+      "kwh": 18020.43
+    },
+    {
+      "weekday": "Mon",
+      "hour": 11,
+      "kwh": 15314.28
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 21,
+      "kwh": 0.89
+    },
+    {
+      "weekday": "Sat",
+      "hour": 17,
+      "kwh": 11968.31
+    },
+    {
+      "weekday": "Sat",
+      "hour": 5,
+      "kwh": 226.14
+    },
+    {
+      "weekday": "Tues",
+      "hour": 8,
+      "kwh": 50.54
+    },
+    {
+      "weekday": "Sun",
+      "hour": 12,
+      "kwh": 15768.33
+    },
+    {
+      "weekday": "Sat",
+      "hour": 15,
+      "kwh": 16528.56
+    },
+    {
+      "weekday": "Sat",
+      "hour": 22,
+      "kwh": 1843.85
+    },
+    {
+      "weekday": "Tues",
+      "hour": 20,
+      "kwh": 7409.03
+    },
+    {
+      "weekday": "Sat",
+      "hour": 3,
+      "kwh": 334.7
+    },
+    {
+      "weekday": "Fri",
+      "hour": 7,
+      "kwh": 2681.45
+    },
+    {
+      "weekday": "Sat",
+      "hour": 19,
+      "kwh": 9291.38
+    },
+    {
+      "weekday": "Sun",
+      "hour": 14,
+      "kwh": 18120.64
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 6,
+      "kwh": 1440.76
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 14,
+      "kwh": 18460.29
+    },
+    {
+      "weekday": "Tues",
+      "hour": 8,
+      "kwh": 6579.29
+    },
+    {
+      "weekday": "Wed",
+      "hour": 7,
+      "kwh": 3099.52
+    },
+    {
+      "weekday": "Thurs",
+      "hour": 0,
+      "kwh": 406.23
+    },
+    {
+      "weekday": "Sun",
+      "hour": 0,
+      "kwh": 498.49
+    },
+    {
+      "weekday": "Wed",
+      "hour": 1,
+      "kwh": 256.44
+    },
+    {
+      "weekday": "Wed",
+      "hour": 3,
+      "kwh": 257.99
+    },
+    {
+      "weekday": "Tues",
+      "hour": 2,
+      "kwh": 320.92
+    },
+    {
+      "weekday": "Sat",
+      "hour": 2,
+      "kwh": 301.78
+    }
+  ],
+  "platform": [
+    {
+      "name": "android",
+      "value": 74777
+    },
+    {
+      "name": "ios",
+      "value": 144827
+    },
+    {
+      "name": "web",
+      "value": 396
+    }
+  ],
+  "top_stations": [
+    {
+      "name": "航空港区迎宾大道·交流充电站1号",
+      "kwh": 125092.6,
+      "sessions": 21521
+    },
+    {
+      "name": "经开区航海东路·直流充电站3号",
+      "kwh": 80347.3,
+      "sessions": 13890
+    },
+    {
+      "name": "航空港区迎宾大道·交流充电站2号",
+      "kwh": 72213.7,
+      "sessions": 12445
+    },
+    {
+      "name": "上街区中心路·交直流充电站1号",
+      "kwh": 38410.5,
+      "sessions": 6645
+    },
+    {
+      "name": "高新区科学大道·交直流充电站10号",
+      "kwh": 34541.3,
+      "sessions": 5963
+    },
+    {
+      "name": "经开区第八大街·交直流充电站1号",
+      "kwh": 33702.0,
+      "sessions": 5749
+    },
+    {
+      "name": "经开区第八大街·交直流充电站8号",
+      "kwh": 30623.1,
+      "sessions": 5272
+    },
+    {
+      "name": "郑东新区金水东路·交直流充电站1号",
+      "kwh": 30236.6,
+      "sessions": 5204
+    },
+    {
+      "name": "二七区淮河路·交直流充电站4号",
+      "kwh": 25981.1,
+      "sessions": 4454
+    },
+    {
+      "name": "金水区北三环·直流充电站1号",
+      "kwh": 24834.1,
+      "sessions": 4217
+    },
+    {
+      "name": "航空港区长安路·直流充电站3号",
+      "kwh": 24729.9,
+      "sessions": 4253
+    },
+    {
+      "name": "郑东新区金水东路·交直流充电站6号",
+      "kwh": 24433.2,
+      "sessions": 4209
+    }
+  ],
+  "cluster_labels": {
+    "3": "慢充短时型",
+    "1": "慢充短时型",
+    "2": "慢充短时型",
+    "0": "慢充短时型"
+  },
+  "models": [
+    {
+      "name": "GBT",
+      "mae": 1.8031,
+      "rmse": 2.6875,
+      "r2": 0.2709
+    },
+    {
+      "name": "随机森林",
+      "mae": 1.8152,
+      "rmse": 2.7208,
+      "r2": 0.2527
+    },
+    {
+      "name": "线性回归",
+      "mae": 2.0245,
+      "rmse": 2.9495,
+      "r2": 0.1218
+    }
+  ],
+  "importances": [
+    {
+      "name": "时长",
+      "value": 0.7722
+    },
+    {
+      "name": "小时",
+      "value": 0.1308
+    },
+    {
+      "name": "设施",
+      "value": 0.0427
+    },
+    {
+      "name": "车队",
+      "value": 0.0368
+    },
+    {
+      "name": "电站",
+      "value": 0.0169
+    },
+    {
+      "name": "平台",
+      "value": 0.0003
+    },
+    {
+      "name": "星期",
+      "value": 0.0002
+    }
+  ],
+  "anomalies": {
+    "count": 1110,
+    "items": [
+      {
+        "sessionId": "200101123",
+        "hour": 6,
+        "kwh": 29.65,
+        "hrs": 3.4,
+        "fee": 40.15
+      },
+      {
+        "sessionId": "200151873",
+        "hour": 13,
+        "kwh": 29.65,
+        "hrs": 4.15,
+        "fee": 22.52
+      },
+      {
+        "sessionId": "200133909",
+        "hour": 6,
+        "kwh": 29.53,
+        "hrs": 3.21,
+        "fee": 36.9
+      },
+      {
+        "sessionId": "200054893",
+        "hour": 7,
+        "kwh": 29.47,
+        "hrs": 3.34,
+        "fee": 18.25
+      },
+      {
+        "sessionId": "200093030",
+        "hour": 15,
+        "kwh": 29.28,
+        "hrs": 3.65,
+        "fee": 39.42
+      },
+      {
+        "sessionId": "200025170",
+        "hour": 14,
+        "kwh": 29.17,
+        "hrs": 2.78,
+        "fee": 24.16
+      },
+      {
+        "sessionId": "200051119",
+        "hour": 6,
+        "kwh": 28.87,
+        "hrs": 3.14,
+        "fee": 23.41
+      },
+      {
+        "sessionId": "200216378",
+        "hour": 9,
+        "kwh": 28.85,
+        "hrs": 4.1,
+        "fee": 0.6
+      },
+      {
+        "sessionId": "200058278",
+        "hour": 4,
+        "kwh": 28.63,
+        "hrs": 4.05,
+        "fee": 28.4
+      },
+      {
+        "sessionId": "200192862",
+        "hour": 4,
+        "kwh": 28.6,
+        "hrs": 4.25,
+        "fee": 21.81
+      },
+      {
+        "sessionId": "200199759",
+        "hour": 7,
+        "kwh": 28.59,
+        "hrs": 4.55,
+        "fee": 0.42
+      },
+      {
+        "sessionId": "200130090",
+        "hour": 13,
+        "kwh": 28.49,
+        "hrs": 3.89,
+        "fee": 33.11
+      },
+      {
+        "sessionId": "200136613",
+        "hour": 12,
+        "kwh": 28.39,
+        "hrs": 5.75,
+        "fee": 0.58
+      },
+      {
+        "sessionId": "200052466",
+        "hour": 14,
+        "kwh": 28.01,
+        "hrs": 4.34,
+        "fee": 21.81
+      },
+      {
+        "sessionId": "200080122",
+        "hour": 21,
+        "kwh": 27.98,
+        "hrs": 3.27,
+        "fee": 36.14
+      },
+      {
+        "sessionId": "200208043",
+        "hour": 17,
+        "kwh": 27.95,
+        "hrs": 5.19,
+        "fee": 0.38
+      },
+      {
+        "sessionId": "200091544",
+        "hour": 17,
+        "kwh": 27.94,
+        "hrs": 4.77,
+        "fee": 19.9
+      },
+      {
+        "sessionId": "200136009",
+        "hour": 14,
+        "kwh": 27.89,
+        "hrs": 3.93,
+        "fee": 23.81
+      },
+      {
+        "sessionId": "200130995",
+        "hour": 16,
+        "kwh": 27.71,
+        "hrs": 4.9,
+        "fee": 30.44
+      },
+      {
+        "sessionId": "200042123",
+        "hour": 12,
+        "kwh": 27.64,
+        "hrs": 4.59,
+        "fee": 0.62
+      },
+      {
+        "sessionId": "200057261",
+        "hour": 15,
+        "kwh": 27.62,
+        "hrs": 3.41,
+        "fee": 25.56
+      },
+      {
+        "sessionId": "200039895",
+        "hour": 11,
+        "kwh": 27.32,
+        "hrs": 4.69,
+        "fee": 37.02
+      },
+      {
+        "sessionId": "200113625",
+        "hour": 19,
+        "kwh": 27.3,
+        "hrs": 4.62,
+        "fee": 19.63
+      },
+      {
+        "sessionId": "200184622",
+        "hour": 8,
+        "kwh": 27.22,
+        "hrs": 3.97,
+        "fee": 33.95
+      }
+    ],
+    "hourly": [
+      {
+        "hour": 0,
+        "n": 7
+      },
+      {
+        "hour": 1,
+        "n": 12
+      },
+      {
+        "hour": 2,
+        "n": 12
+      },
+      {
+        "hour": 3,
+        "n": 13
+      },
+      {
+        "hour": 4,
+        "n": 20
+      },
+      {
+        "hour": 5,
+        "n": 3
+      },
+      {
+        "hour": 6,
+        "n": 16
+      },
+      {
+        "hour": 7,
+        "n": 20
+      },
+      {
+        "hour": 8,
+        "n": 34
+      },
+      {
+        "hour": 9,
+        "n": 73
+      },
+      {
+        "hour": 10,
+        "n": 58
+      },
+      {
+        "hour": 11,
+        "n": 91
+      },
+      {
+        "hour": 12,
+        "n": 118
+      },
+      {
+        "hour": 13,
+        "n": 98
+      },
+      {
+        "hour": 14,
+        "n": 126
+      },
+      {
+        "hour": 15,
+        "n": 98
+      },
+      {
+        "hour": 16,
+        "n": 81
+      },
+      {
+        "hour": 17,
+        "n": 72
+      },
+      {
+        "hour": 18,
+        "n": 53
+      },
+      {
+        "hour": 19,
+        "n": 47
+      },
+      {
+        "hour": 20,
+        "n": 27
+      },
+      {
+        "hour": 21,
+        "n": 16
+      },
+      {
+        "hour": 22,
+        "n": 10
+      },
+      {
+        "hour": 23,
+        "n": 5
+      }
+    ]
+  },
+  "rfm": [
+    {
+      "name": "沉默",
+      "value": 34,
+      "avg_fee": 2470.7,
+      "avg_freq": 479.4
+    },
+    {
+      "name": "常规",
+      "value": 33,
+      "avg_fee": 11248.7,
+      "avg_freq": 2199.5
+    },
+    {
+      "name": "高价值",
+      "value": 18,
+      "avg_fee": 37277.5,
+      "avg_freq": 7284.3
+    }
+  ],
+  "rules": [
+    {
+      "ante": "Mon · 平峰",
+      "cons": "ios",
+      "confidence": 0.664,
+      "support": 0.06
+    },
+    {
+      "ante": "Thurs · 平峰",
+      "cons": "ios",
+      "confidence": 0.663,
+      "support": 0.06
+    },
+    {
+      "ante": "Thurs",
+      "cons": "ios",
+      "confidence": 0.661,
+      "support": 0.094
+    },
+    {
+      "ante": "Wed · 平峰",
+      "cons": "ios",
+      "confidence": 0.66,
+      "support": 0.06
+    },
+    {
+      "ante": "Wed",
+      "cons": "ios",
+      "confidence": 0.66,
+      "support": 0.095
+    },
+    {
+      "ante": "Sat · 平峰",
+      "cons": "ios",
+      "confidence": 0.659,
+      "support": 0.059
+    },
+    {
+      "ante": "平峰",
+      "cons": "ios",
+      "confidence": 0.659,
+      "support": 0.419
+    },
+    {
+      "ante": "Fri",
+      "cons": "ios",
+      "confidence": 0.659,
+      "support": 0.095
+    }
+  ],
+  "peak_clf": {
+    "auc": 0.6003,
+    "accuracy": 0.7422,
+    "peak_ratio": 0.26,
+    "peak_n": 57197
+  },
+  "updated": "2026-09-12 16:23:11"
+}
