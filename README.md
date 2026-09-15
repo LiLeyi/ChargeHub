@@ -6,9 +6,19 @@
 |------|--------|------|
 | **管理端** | 服务器 + 运营后台（写数据库、听 8888 端口） | 全组联调时 **只允许一台电脑开** |
 | **用户端** | 手机竖屏充电 App（底栏找桩 / 预约 / 充电 / 订单 / 我的） | 每个人的虚拟机都可以开，可以同时开很多个 |
-| **运营大屏** | 浏览器里的图表 | 任何人用浏览器打开即可（只看、不改数据） |
+| **运营大屏** | 浏览器里的 Vue 3 + ECharts 图表（Flask `:5000`，只读） | 任何人用浏览器打开即可（只看、不改数据） |
 
-只在 **Ubuntu 22.04 桌面** 里运行。不要在 Windows 里双击这些程序。
+只在 **Ubuntu 22.04 桌面** 里运行。不要在 Windows 里双击 Qt 程序。
+
+仓库里和呈现相关的目录：
+
+| 目录 | 是什么 |
+|------|--------|
+| `adminserver/` `userclient/` `common/` | Qt 管理端 / 用户端 / 协议与地图 |
+| `dashboard/` | 大屏：`app.py`（Flask）+ `web/`（Vue 3 源码）+ `dist/`（已构建，直接打开就能看） |
+| `bigdata/` | Hadoop / PySpark 分析（聚类、热力、电池风险）→ `output/spark_report.json` |
+| `dataset/` | 原始表 `04.数据集最终版/` + 扩样 CSV `big/`（约 22 万会话），给 Spark 读 |
+| `database/` `protocol/` `ml/` `docs/` | 表结构、报文、预测入口、说明文档 |
 
 **目录**
 
@@ -23,6 +33,7 @@
 9. [改代码与协作约定](#8-改代码与协作约定)
 10. [打不开时](#9-打不开时)
 11. [演示账号](#10-演示账号)
+12. [运营大屏与大数据](#11-运营大屏与大数据)
 
 ---
 
@@ -98,7 +109,7 @@ bash scripts/rebuild.sh
 | `ChargeHub/scripts/打开用户端.bat` | 用户端 | `13800138000` / `123456`，服务器 `127.0.0.1:8888` |
 
 用户端先点「连接」，连上后用顶栏切换 **登录** / **注册**。登录用演示号即可；注册须满足密码规则（6～20 位且含大小写字母和数字），成功后写入管理端数据库并自动登录。窗口是手机竖屏，底栏切换找桩 / 预约 / 充电 / 订单 / 我的。昵称、住址、评价、电站名称等可在窗口内用 **Ctrl+空格** 切换拼音（Linux ibus，不是任务栏的微软拼音）；手机号和密码仍用英文数字。  
-大屏：管理端里 **运营决策大屏** → **打开 Web 大屏**。
+大屏：管理端里 **运营决策大屏** → **打开 Web 大屏**，或浏览器打开 `http://127.0.0.1:5000`。页面是 **Vue 3（`<script setup>`）+ ECharts**，Flask 只读 SQLite 和 `bigdata/output/spark_report.json`，不会改订单/余额/桩状态。仓库已带 `dashboard/dist`，组员 **不必先 npm install** 也能看到和本地一样的图。改前端或重跑 Spark 见 [第 11 节](#11-运营大屏与大数据)。
 
 ### 2.2 建议自测顺序（约 10 分钟）
 
@@ -366,8 +377,11 @@ cd ~/ChargeHub-Linux/user && ./run.sh
 | `adminserver/src/database.*` | SQLite 唯一写入口 | `query` / `one` / `execute` / `transaction` | 改表要同步 `schema.sql` |
 | `adminserver/src/mainwindow.*` | 运营界面 | 直接调 Dispatch，不走 Socket | 后台页面 |
 | `adminserver/src/chartwidget.*` | 自绘图表 | `setPoints` / `setBars` / `setSlices` | 仅显示 |
-| `dashboard/app.py` | Flask 只读大屏 | `GET /` `GET /api/overview` `GET /api/analysis` `GET /api/bigdata` | 业务 KPI + Spark 图；禁止 UPDATE 订单 |
+| `dashboard/app.py` | Flask 只读大屏 | `GET /` `GET /api/overview` `GET /api/analysis` `GET /api/bigdata` | 有 `dist/index.html` 就提供 Vue 页；禁止 UPDATE 订单 |
+| `dashboard/web/` | Vue 3 + Vite + ECharts 源码 | 全部 `.vue` 用 `<script setup>` | 改完 `npm run build`，产物进 `dashboard/dist` |
+| `dashboard/dist/` | 已构建的大屏静态页 | Flask 直接托管 | 组员克隆后即可打开，无需 Node |
 | `bigdata/spark_analyze.py` | Hadoop + PySpark | GBT 负荷、KMeans 聚类、电池风险 | 只写 `bigdata/output` 与分析表 |
+| `dataset/` | Spark 用的 CSV | `04.数据集最终版/` 原始表；`big/` 扩样 | 与本地大屏同一套数；详见 `dataset/big/README.md` |
 | `ml/forecast.py` | 预测入口 | 有 Spark 报告则导入，否则小时均值 | 不改余额、不改桩状态 |
 | `database/schema.sql` | 表结构说明 | 与 C++ 建表一致 | 改库先改此文件再改 C++ |
 | `protocol/messages.md` | 报文 type 列表 | 联调对照表 | 新增 type 必须更新此文件 |
@@ -451,7 +465,8 @@ bash /mnt/hgfs/ChargeHub/scripts/rebuild.sh
 | 用户端连不上（连组里服务器） | 别人是不是也开了管理端？你填的是不是 `127.0.0.1`？Wi-Fi 是否相同？虚拟机是否桥接？`ping` 通不通？ |
 | 提示已有管理端 / 8888 占用 | 关掉多余的管理端，全组只留一份 |
 | 能登录但订单和别人不一样 | 你们连的不是同一台服务器（两套库） |
-| 浏览器打不开大屏 | 服务器上要跑 `python3 app.py`；别人请用 `http://服务器IP:5000` 不要用 127.0.0.1 |
+| 浏览器打不开大屏 | 在 `dashboard/` 跑 `python3 app.py`；别人请用 `http://服务器IP:5000` 不要用 127.0.0.1。确认存在 `dashboard/dist/index.html` |
+| 大屏 KPI 有数但热力/聚类是空的 | 需要 `bigdata/output/spark_report.json`。按第 11 节用 `dataset/big` 跑一遍 Spark |
 | 双击 `run.sh` 没反应 | 还没编过，回到第 1 节 |
 | 改代码没变化 | 必须再跑 `rebuild.sh` |
 | 输入框打不出中文 | 在 ChargeHub 窗口里按 **Ctrl+空格** 开拼音（不要用 Windows 任务栏输入法）。仍不行则关掉两个窗口再双击 bat 重开 |
@@ -466,3 +481,54 @@ bash /mnt/hgfs/ChargeHub/scripts/rebuild.sh
 | 用户端 | `13800138000` | `123456` | 不要用此号测注销 |
 
 源码在 `ChargeHub/`，编好的程序在 `~/ChargeHub-Linux/`（`admin` / `user` / `dashboard`）。发给同学当用户端时，拷 `user` **整夹**。
+
+---
+
+## 11. 运营大屏与大数据
+
+大屏要和本地看起来一样，仓库里需要这三块（都已进 git，**不含** `node_modules`）：
+
+| 路径 | 作用 |
+|------|------|
+| `dashboard/web/` | Vue 3 源码（Composition API + `<script setup>`） |
+| `dashboard/dist/` | `npm run build` 的产物，Flask 优先托管这里 |
+| `dataset/` + `bigdata/output/` | Spark 输入 CSV 和已经算好的 `spark_report.json` |
+
+### 11.1 只看大屏（组员克隆后）
+
+管理端开着的前提下：
+
+```bash
+cd ChargeHub/dashboard
+CHARGEHUB_DB=$HOME/ChargeHub-Linux/admin/data/chargehub.db python3 app.py
+```
+
+浏览器：`http://127.0.0.1:5000`。  
+`GET /api/overview` 读 SQLite 营收/订单；`GET /api/bigdata` 读 `bigdata/output/spark_report.json`（HDFS 没装时 Spark 本来就是读本地 `dataset/big` 算出来的）。
+
+### 11.2 改了 Vue 页面
+
+需要本机 Node 18+（只改 Qt / Flask / Spark 的人可以跳过）：
+
+```bash
+cd ChargeHub/dashboard/web
+npm install
+npm run build
+```
+
+构建结果写到 `dashboard/dist/`。再重启 `python3 app.py`。不要把 `node_modules` 提交进仓库。
+
+### 11.3 重跑 Hadoop / PySpark（刷新智能分析图）
+
+步骤、算法说明见 **`bigdata/README.md`**。最短路径（HDFS 可选，没有则读 `dataset/big`）：
+
+```bash
+cd ChargeHub/bigdata
+python3 expand_dataset.py          # 若 dataset/big 已在仓库里，可跳过
+# 已安装 Spark 时：
+bash scripts/run_spark_only.sh     # 或 bash scripts/run_pipeline.sh
+```
+
+输出覆盖 `bigdata/output/spark_report.json`。大屏刷新即可，**不会**改 `charge_order` / `user.balance` / `pile.status`。
+
+原始表在 `dataset/04.数据集最终版/`，扩样规模见 `dataset/big/README.md`（默认约 22 万会话 + 8 万条遥测）。
