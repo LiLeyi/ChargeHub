@@ -1,0 +1,12 @@
+序号,字段名,数据类型,字段含义
+1,esd,int64,设备唯一标识
+2,record_time,float64,数据记录时间戳
+3,soc,float64,电池荷电状态（剩余电量百分比）
+4,pack_voltage (V),float64,电池包总电压（单位：伏）
+5,charge_current (A),float64,充电电流（单位：安）
+6,max_cell_voltage (V),float64,单体电池最高电压（单位：伏）
+7,min_cell_voltage (V),float64,单体电池最低电压（单位：伏）
+8,max_temperature (℃),int64,电池最高温度（单位：摄氏度）
+9,min_temperature (℃),int64,电池最低温度（单位：摄氏度）
+10,available_energy (kw),float64,电池可用能量（单位：千瓦）
+11,available_capacity (Ah),float64,电池可用容量（单位：安时）

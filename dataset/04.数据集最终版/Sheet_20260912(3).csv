@@ -1,0 +1,9 @@
+序号,字段名,数据类型,字段含义
+1,stationId,int64,充电站唯一ID
+2,locationId,int64,充电站位置ID
+3,facilityType,int64,设施类型编码
+4,station_name,object,充电站名称
+5,address,object,充电站详细地址
+6,device_count,int64,充电站充电桩数量
+7,open_time,object,充电站开放时间
+8,update_time,object,数据更新时间
