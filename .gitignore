@@ -5,6 +5,9 @@ adminserver/adminserver
 userclient/userclient
 **/data/*.db-journal
 dist/
+!dashboard/dist/
+!dashboard/dist/**
+node_modules/
 docs/*.log
 docs/_vm*
 __pycache__/

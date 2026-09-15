@@ -1,11 +1,23 @@
 /**
  * @file tencentapi.cpp
- * @brief 高德 WebService 与公开降级服务查询；保留旧文件名兼容工程。
+ * @brief 外部 HTTP 实现：腾讯 WebService 签名、同步 GET、瓦片/天气/路线/IP 解析与兜底。
+ *
+ * 【凭证】优先 #include "tencent_credentials.h"（本机文件，勿提交、勿在日志打印）；
+ *   没有该头则用下方宏。运行时再被环境变量覆盖（见 key()/sk()）。
+ * 【同步 GET】fetchUrl 使用短寿命 QNetworkAccessManager + QEventLoop，超时 abort。
+ *   禁止在用户端滚动地图的热路径里调 getJson（瓦片必须异步）。
+ * 【与 Socket 的边界】本文件零 QTcpSocket、零 Dispatch。失败只返回空/ok=false。
  */
+
 #include "tencentapi.h"
+
+#if __has_include("tencent_credentials.h")
+#include "tencent_credentials.h"
+#endif
 
 #include <algorithm>
 #include <cmath>
+#include <QCryptographicHash>
 #include <QDate>
 #include <QEventLoop>
 #include <QJsonArray>
@@ -17,12 +29,16 @@
 #include <QTimer>
 #include <QUrlQuery>
 
-#ifndef CHARGEHUB_AMAP_KEY
-#define CHARGEHUB_AMAP_KEY "fa99e719d907e49c9eee8876d19079e9"
+#ifndef CHARGEHUB_TENCENT_MAP_KEY
+#define CHARGEHUB_TENCENT_MAP_KEY "2L2BZ-7WE6C-ZFP2W-A23GC-5WZK2-KHBGF"
+#endif
+#ifndef CHARGEHUB_TENCENT_MAP_SK
+#define CHARGEHUB_TENCENT_MAP_SK ""
 #endif
 
 namespace {
 
+/** 腾讯 sig 要求：参数按 key、再按 value 排序后 key=percentEncode(value) 用 & 拼接。 */
 QString encodedQuery(const QList<QPair<QString, QString>> &params)
 {
     QList<QPair<QString, QString>> sorted = params;
@@ -40,6 +56,7 @@ QString encodedQuery(const QList<QPair<QString, QString>> &params)
     return parts.join('&');
 }
 
+/** Open-Meteo WMO weather_code → 中文短词，供 parseOpenMeteo。未知码当「多云」。 */
 QString wmoText(int code)
 {
     if (code == 0)
@@ -63,6 +80,7 @@ QString wmoText(int code)
     return QString::fromUtf8("多云");
 }
 
+/** Web Mercator 整数瓦片号，未做 zoom 夹紧；调用方 mapTile/rasterTileUrls 会先夹。 */
 void tileXY(double lat, double lng, int zoom, int *x, int *y)
 {
     const double n = static_cast<double>(1 << zoom);
@@ -73,6 +91,7 @@ void tileXY(double lat, double lng, int zoom, int *x, int *y)
                                      / 2.0 * n));
 }
 
+/** 天气/周末对预测负荷的经验系数。雨雪雷 0.90，周六日 0.88，否则 1.08。不参与实时电价。 */
 double loadFactor(const QString &weather)
 {
     if (weather.contains(QString::fromUtf8("雨")) || weather.contains(QString::fromUtf8("雪"))
@@ -85,19 +104,38 @@ double loadFactor(const QString &weather)
 
 } // namespace
 
+/** 环境变量非空则覆盖编译期宏。返回值不要 qDebug。 */
 QString TencentApi::key()
 {
-    const QString env = qEnvironmentVariable("CHARGEHUB_AMAP_KEY").trimmed();
-    return env.isEmpty() ? QString::fromLatin1(CHARGEHUB_AMAP_KEY) : env;
+    const QString env = qEnvironmentVariable("CHARGEHUB_TENCENT_MAP_KEY").trimmed();
+    return env.isEmpty() ? QString::fromLatin1(CHARGEHUB_TENCENT_MAP_KEY) : env;
 }
 
+QString TencentApi::sk()
+{
+    const QString env = qEnvironmentVariable("CHARGEHUB_TENCENT_MAP_SK").trimmed();
+    return env.isEmpty() ? QString::fromLatin1(CHARGEHUB_TENCENT_MAP_SK) : env;
+}
+
+/**
+ * @brief 腾讯 WebService 带 key、可选 sig 的绝对 URL。
+ * SK 为空则不加 sig（控制台未强制签名时可用）。
+ */
 QUrl TencentApi::signedUrl(const QString &path, QList<QPair<QString, QString>> params)
 {
     params.append({QStringLiteral("key"), key()});
     const QString query = encodedQuery(params);
-    return QUrl(QStringLiteral("https://restapi.amap.com") + path + "?" + query);
+    QString full = QStringLiteral("https://apis.map.qq.com") + path + "?" + query;
+    const QString secret = sk();
+    if (!secret.isEmpty()) {
+        const QByteArray source = (path + "?" + query + secret).toUtf8();
+        const QString sig = QString::fromLatin1(QCryptographicHash::hash(source, QCryptographicHash::Md5).toHex());
+        full += "&sig=" + sig;
+    }
+    return QUrl(full);
 }
 
+/** @brief 出站请求公共头：UA、超时、高德/腾讯瓦片 Referer。 */
 QNetworkRequest TencentApi::request(const QUrl &url)
 {
     QNetworkRequest req(url);
@@ -108,12 +146,18 @@ QNetworkRequest TencentApi::request(const QUrl &url)
     const QString host = url.host();
     if (host.contains(QLatin1String("autonavi")) || host.contains(QLatin1String("amap")))
         req.setRawHeader("Referer", "https://www.amap.com/");
+    if (host.contains(QLatin1String("gtimg.com")))
+        req.setRawHeader("Referer", "https://map.qq.com/");
 #if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
     req.setTransferTimeout(8000);
 #endif
     return req;
 }
 
+/**
+ * 同步下载 URL 正文。无效 URL 或超时返回空 QByteArray。
+ * 使用独立 QEventLoop，调用线程会卡住 timeoutMs（最少 1s）。
+ */
 QByteArray fetchUrl(const QUrl &url, int timeoutMs)
 {
     if (!url.isValid())
@@ -137,11 +181,13 @@ QByteArray fetchUrl(const QUrl &url, int timeoutMs)
     return raw;
 }
 
+/** @brief fetchUrl + fromJson。非对象 JSON 得到空对象。 */
 QJsonObject TencentApi::getUrlJson(const QUrl &url, int timeoutMs)
 {
     return QJsonDocument::fromJson(fetchUrl(url, timeoutMs)).object();
 }
 
+/** @brief 仅腾讯：无 Key 不发网。 */
 QJsonObject TencentApi::getJson(const QString &path, const QList<QPair<QString, QString>> &params,
                                 int timeoutMs)
 {
@@ -152,72 +198,66 @@ QJsonObject TencentApi::getJson(const QString &path, const QList<QPair<QString, 
 
 QUrl TencentApi::staticMapUrl(double lat, double lng)
 {
-    const QString center = QString::number(lng, 'f', 6) + "," + QString::number(lat, 'f', 6);
-    const QString marker = QStringLiteral("mid,,A:%1").arg(center);
-    return signedUrl(QStringLiteral("/v3/staticmap"),
-                     {{QStringLiteral("location"), center},
+    const QString center = QString::number(lat, 'f', 6) + "," + QString::number(lng, 'f', 6);
+    const QString marker = QStringLiteral("size:large|color:red|label:S|%1").arg(center);
+    return signedUrl(QStringLiteral("/ws/staticmap/v2/"),
+                     {{QStringLiteral("center"), center},
                       {QStringLiteral("zoom"), QStringLiteral("16")},
                       {QStringLiteral("size"), QStringLiteral("640*360")},
+                      {QStringLiteral("scale"), QStringLiteral("2")},
                       {QStringLiteral("markers"), marker}});
 }
 
-QUrl TencentApi::weatherAdcodeUrl(double lat, double lng)
+QUrl TencentApi::weatherNowUrl(double lat, double lng)
 {
-    const QString loc = QString::number(lng, 'f', 6) + "," + QString::number(lat, 'f', 6);
-    return signedUrl(QStringLiteral("/v3/geocode/regeo"),
+    const QString loc = QString::number(lat, 'f', 6) + "," + QString::number(lng, 'f', 6);
+    return signedUrl(QStringLiteral("/ws/weather/v1/"),
                      {{QStringLiteral("location"), loc},
-                      {QStringLiteral("extensions"), QStringLiteral("base")}});
-}
-
-QString TencentApi::parseWeatherAdcode(const QJsonObject &obj)
-{
-    if (obj.value(QStringLiteral("status")).toString() != QLatin1String("1"))
-        return {};
-    return obj.value(QStringLiteral("regeocode")).toObject()
-        .value(QStringLiteral("addressComponent")).toObject()
-        .value(QStringLiteral("adcode")).toString();
-}
-
-QUrl TencentApi::weatherNowUrl(const QString &adcode)
-{
-    return signedUrl(QStringLiteral("/v3/weather/weatherInfo"),
-                     {{QStringLiteral("city"), adcode},
-                      {QStringLiteral("extensions"), QStringLiteral("base")}});
+                      {QStringLiteral("type"), QStringLiteral("now")}});
 }
 
 TencentApi::Weather TencentApi::parseWeather(const QJsonObject &obj)
 {
     Weather out;
-    if (obj.value(QStringLiteral("status")).toString() != QLatin1String("1"))
+    if (obj.value(QStringLiteral("status")).toInt(-1) != 0)
         return out;
-    const QJsonArray realtime = obj.value(QStringLiteral("lives")).toArray();
+    const QJsonArray realtime = obj.value(QStringLiteral("result")).toObject()
+                                    .value(QStringLiteral("realtime"))
+                                    .toArray();
     if (realtime.isEmpty())
         return out;
     const QJsonObject first = realtime.first().toObject();
-    out.text = first.value(QStringLiteral("weather")).toString();
+    const QJsonObject infos = first.value(QStringLiteral("infos")).toObject();
+    out.text = infos.value(QStringLiteral("weather")).toString();
     if (out.text.isEmpty())
         return out;
     out.ok = true;
+    out.source = QString::fromUtf8("腾讯位置服务");
     out.factor = loadFactor(out.text);
     out.detail = out.text;
-    out.source = QString::fromUtf8("高德地图");
-    if (first.contains(QStringLiteral("temperature")))
-        out.detail += QString::fromUtf8(" %1℃").arg(first.value(QStringLiteral("temperature")).toString());
-    const QString city = first.value(QStringLiteral("city")).toString();
-    if (!city.isEmpty())
-        out.detail += QString::fromUtf8(" · ") + city;
+    if (infos.contains(QStringLiteral("temperature")))
+        out.detail += QString::fromUtf8(" %1℃").arg(infos.value(QStringLiteral("temperature")).toInt());
+    const QString district = first.value(QStringLiteral("district")).toString();
+    if (!district.isEmpty())
+        out.detail += QString::fromUtf8(" · ") + district;
     return out;
 }
 
+/**
+ * @brief 腾讯实况 → Open-Meteo → 模拟因子。三层都为预测服务，失败不影响充电 Socket。
+ */
 TencentApi::Weather TencentApi::weatherNow(double lat, double lng)
 {
     Weather fallback;
     fallback.source = QString::fromUtf8("模拟");
     fallback.factor = loadFactor(QString());
-    const QString adcode = parseWeatherAdcode(getUrlJson(weatherAdcodeUrl(lat, lng)));
-    const Weather amap = adcode.isEmpty() ? Weather{} : parseWeather(getUrlJson(weatherNowUrl(adcode)));
-    if (amap.ok)
-        return amap;
+    const Weather tencent = parseWeather(getJson(QStringLiteral("/ws/weather/v1/"),
+                                                 {{QStringLiteral("location"),
+                                                   QString::number(lat, 'f', 6) + ","
+                                                       + QString::number(lng, 'f', 6)},
+                                                  {QStringLiteral("type"), QStringLiteral("now")}}));
+    if (tencent.ok)
+        return tencent;
     const Weather meteo = parseOpenMeteo(getUrlJson(openMeteoUrl(lat, lng)));
     return meteo.ok ? meteo : fallback;
 }
@@ -291,6 +331,10 @@ void TencentApi::worldPixelToLatLng(double x, double y, int zoom, double *lat, d
     *lat = latRad * 180.0 / 3.14159265358979323846;
 }
 
+/**
+ * @brief 国内可访问的栅格瓦片候选。顺序：高德矢量 → 高德 style=7 → 腾讯 rt。
+ * slot 用 (x+y)%4 分散 CDN 子域，不是业务字段。
+ */
 QList<QUrl> TencentApi::rasterTileUrlsXY(int tileX, int tileY, int zoom)
 {
     zoom = clampTileZoom(zoom);
@@ -314,6 +358,11 @@ QList<QUrl> TencentApi::rasterTileUrlsXY(int tileX, int tileY, int zoom)
                          .arg(tileX)
                          .arg(tileY)
                          .arg(zoom)));
+    urls.append(QUrl(QStringLiteral("https://rt%1.map.gtimg.com/tile?z=%2&x=%3&y=%4&styleid=0&scene=0")
+                         .arg((tileX + tileY) % 4)
+                         .arg(zoom)
+                         .arg(tileX)
+                         .arg(tileY)));
     return urls;
 }
 
@@ -368,14 +417,18 @@ QUrl TencentApi::overviewStaticMapUrl(double fromLat, double fromLng, double toL
         return {};
     const double cLat = (fromLat + toLat) / 2.0;
     const double cLng = (fromLng + toLng) / 2.0;
-    const QString center = QString::number(cLng, 'f', 6) + "," + QString::number(cLat, 'f', 6);
-    const QString from = QString::number(fromLng, 'f', 6) + "," + QString::number(fromLat, 'f', 6);
-    const QString to = QString::number(toLng, 'f', 6) + "," + QString::number(toLat, 'f', 6);
-    const QString markers = QStringLiteral("mid,,A:%1|mid,,B:%2").arg(from, to);
-    return signedUrl(QStringLiteral("/v3/staticmap"),
-                     {{QStringLiteral("location"), center},
+    const QString center = QString::number(cLat, 'f', 6) + "," + QString::number(cLng, 'f', 6);
+    const QString from = QString::number(fromLat, 'f', 6) + "," + QString::number(fromLng, 'f', 6);
+    const QString to = QString::number(toLat, 'f', 6) + "," + QString::number(toLng, 'f', 6);
+    const QString markers =
+        QStringLiteral("size:large|color:0x2563EB|label:A|%1|size:large|color:0xDC2626|label:B|%2")
+            .arg(from)
+            .arg(to);
+    return signedUrl(QStringLiteral("/ws/staticmap/v2/"),
+                     {{QStringLiteral("center"), center},
                       {QStringLiteral("zoom"), QString::number(fitTileZoom(fromLat, fromLng, toLat, toLng))},
                       {QStringLiteral("size"), QStringLiteral("640*360")},
+                      {QStringLiteral("scale"), QStringLiteral("2")},
                       {QStringLiteral("markers"), markers}});
 }
 
@@ -474,23 +527,25 @@ bool TencentApi::parseOsrm(const QJsonObject &obj, double *meters, int *seconds)
     return true;
 }
 
+/**
+ * @brief 正地理编码。只用 /ws/geocoder/v1/。本地「北理工」等地标匹配不在本函数，在 UserWindow。
+ */
 TencentApi::Geo TencentApi::geocode(const QString &address)
 {
     Geo out;
     const QString text = address.trimmed();
     if (text.isEmpty())
         return out;
-    const QJsonObject obj = getJson(QStringLiteral("/v3/geocode/geo"),
+    const QJsonObject obj = getJson(QStringLiteral("/ws/geocoder/v1/"),
                                     {{QStringLiteral("address"), text}});
-    if (obj.value(QStringLiteral("status")).toString() == QLatin1String("1")) {
-        const QJsonArray geocodes = obj.value(QStringLiteral("geocodes")).toArray();
-        const QJsonObject result = geocodes.isEmpty() ? QJsonObject{} : geocodes.first().toObject();
-        const QStringList coordinate = result.value(QStringLiteral("location")).toString().split(',');
-        if (coordinate.size() == 2) {
-            out.lng = coordinate.at(0).toDouble();
-            out.lat = coordinate.at(1).toDouble();
-        }
-        out.name = result.value(QStringLiteral("formatted_address")).toString();
+    if (obj.value(QStringLiteral("status")).toInt(-1) == 0) {
+        const QJsonObject result = obj.value(QStringLiteral("result")).toObject();
+        const QJsonObject loc = result.value(QStringLiteral("location")).toObject();
+        out.lat = loc.value(QStringLiteral("lat")).toDouble();
+        out.lng = loc.value(QStringLiteral("lng")).toDouble();
+        out.name = result.value(QStringLiteral("title")).toString();
+        if (out.name.isEmpty())
+            out.name = result.value(QStringLiteral("address")).toString();
         if (out.name.isEmpty())
             out.name = text;
         out.ok = out.lat != 0.0 || out.lng != 0.0;
@@ -500,29 +555,38 @@ TencentApi::Geo TencentApi::geocode(const QString &address)
     return out;
 }
 
-QUrl TencentApi::amapGeocodeUrl(const QString &address)
+/**
+ * @brief mode→path：walk=walking，bike=bicycling，bus=transit/export，其它=driving。
+ */
+QUrl TencentApi::directionUrl(const QString &mode, double fromLat, double fromLng, double toLat, double toLng)
 {
-    const QString env = qEnvironmentVariable("CHARGEHUB_AMAP_KEY").trimmed();
-    const QString apiKey = env.isEmpty() ? QString::fromLatin1(CHARGEHUB_AMAP_KEY) : env;
-    QUrl url(QStringLiteral("https://restapi.amap.com/v3/geocode/geo"));
-    QUrlQuery query;
-    query.addQueryItem(QStringLiteral("address"), address.trimmed());
-    query.addQueryItem(QStringLiteral("key"), apiKey);
-    url.setQuery(query);
-    return url;
+    QString path = QStringLiteral("/ws/direction/v1/driving/");
+    if (mode == QStringLiteral("walk"))
+        path = QStringLiteral("/ws/direction/v1/walking/");
+    else if (mode == QStringLiteral("bike"))
+        path = QStringLiteral("/ws/direction/v1/bicycling/");
+    else if (mode == QStringLiteral("bus"))
+        path = QStringLiteral("/ws/direction/v1/transit/export");
+    const QString from = QString::number(fromLat, 'f', 6) + "," + QString::number(fromLng, 'f', 6);
+    const QString to = QString::number(toLat, 'f', 6) + "," + QString::number(toLng, 'f', 6);
+    return signedUrl(path, {{QStringLiteral("from"), from}, {QStringLiteral("to"), to}});
 }
 
-QJsonArray TencentApi::parseAmapGeocodes(const QJsonObject &obj)
+bool TencentApi::parseDirection(const QJsonObject &obj, double *meters, int *seconds)
 {
-    if (obj.value(QStringLiteral("status")).toString() != QLatin1String("1"))
-        return {};
-    QJsonArray valid;
-    const QJsonArray geocodes = obj.value(QStringLiteral("geocodes")).toArray();
-    for (const QJsonValue &value : geocodes) {
-        const QJsonObject hit = value.toObject();
-        const QStringList coordinate = hit.value(QStringLiteral("location")).toString().split(',');
-        if (coordinate.size() == 2)
-            valid.append(hit);
-    }
-    return valid;
+    if (obj.value(QStringLiteral("status")).toInt(-1) != 0)
+        return false;
+    const QJsonArray routes = obj.value(QStringLiteral("result")).toObject()
+                                  .value(QStringLiteral("routes"))
+                                  .toArray();
+    if (routes.isEmpty())
+        return false;
+    const QJsonObject first = routes.first().toObject();
+    const double dist = first.value(QStringLiteral("distance")).toDouble();
+    const int dur = first.value(QStringLiteral("duration")).toInt();
+    if (meters)
+        *meters = dist;
+    if (seconds)
+        *seconds = dur;
+    return dist > 0 || first.contains(QStringLiteral("distance"));
 }

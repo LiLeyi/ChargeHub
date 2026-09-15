@@ -1,13 +1,22 @@
 /**
  * @file protocol.cpp
- * @brief 长度前缀帧的编解码。pack 给发送端；append/tryDecode 给接收端。
+ * @brief 长度前缀帧的编解码实现。发送只 pack；接收 append → tryDecode → nextPacket。
+ *
+ * 与 Python 对端的对应关系（烟测 / 多用户测试必须保持一致）：
+ *   struct.pack(">I", len(body)) + body.encode("utf-8")
+ *   struct.unpack(">I", hdr) 后再 recv 满 len 字节 json.loads
+ *
+ * 不在这里做 gzip、加密、type 分发。那些分别在 TLS（本作业不用）、业务层 RequestDispatcher。
  */
 #include "protocol.h"
 
 #include <QJsonDocument>
 #include <QtEndian>
 
-/** 大端 4 字节长度 + UTF-8 JSON。 */
+/**
+ * @brief 大端 4 字节长度 + Compact UTF-8 JSON。
+ * @see Protocol::pack 头文件说明。
+ */
 QByteArray Protocol::pack(const QJsonObject &obj)
 {
     const QByteArray body = QJsonDocument(obj).toJson(QJsonDocument::Compact);
@@ -18,14 +27,18 @@ QByteArray Protocol::pack(const QJsonObject &obj)
     return out;
 }
 
-/** 接到缓冲末尾再拆。半包留着等下次。 */
+/**
+ * @brief 接到缓冲末尾再拆。半包留在 buf_，完整包进 ready_。
+ */
 void Protocol::append(const QByteArray &chunk)
 {
     buf_.append(chunk);
     tryDecode();
 }
 
-/** 取出已拆好的下一张 JSON；队列空则返回空对象。 */
+/**
+ * @brief 取出已拆好的下一张 JSON；队列空则返回空对象。
+ */
 QJsonObject Protocol::nextPacket()
 {
     if (ready_.isEmpty())
@@ -33,7 +46,12 @@ QJsonObject Protocol::nextPacket()
     return ready_.takeFirst();
 }
 
-/** 长度非法或超过 1MB 则丢弃缓冲，防止坏帧拖死拆包。 */
+/**
+ * @brief 按大端长度切帧；非法长度清空缓冲，防止坏帧把拆包拖死。
+ *
+ * 1MiB 上限对应作业里最大的头像 Base64 等 data 字段，正常业务 JSON 远小于此。
+ * 清空后本连接仍可继续收后续帧（对端若真在发超大包，后续也会再被清）。
+ */
 void Protocol::tryDecode()
 {
     while (buf_.size() >= 4) {

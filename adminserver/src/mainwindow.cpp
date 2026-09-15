@@ -339,7 +339,7 @@ MainWindow::MainWindow(Dispatch *dispatch, QWidget *parent)
     mbl->setContentsMargins(16, 10, 16, 10);
     auto *mt = new QLabel(u8("智能分析"));
     mt->setObjectName("title");
-    auto *ms = new QLabel(u8("负荷预测 · 故障风险 · 评价 NLP，均在管理端 C++ 计算"));
+    auto *ms = new QLabel(u8("Hadoop + PySpark GBT/KMeans · 无 Spark 报告时回退小时均值 · 评价 NLP"));
     ms->setObjectName("muted");
     auto *gen = new QPushButton(u8("刷新分析"));
     auto *adopt = new QPushButton(u8("采纳选中调度建议"));

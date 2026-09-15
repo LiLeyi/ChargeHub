@@ -49,6 +49,12 @@ Dispatch::~Dispatch() = default;
 
 void Dispatch::registerRoutes()
 {
+    /**
+     * 用户端 Socket type → 领域服务。mutating=true 的走 8 秒幂等。
+     * LOGIN/REGISTER 公开；其余必须 token。
+     * HEARTBEAT 无 data，authenticate 已续期 token。
+     * PUSH_CHARGE 不在表内，由 TcpServer 单向下发。
+     */
     using SR = ServiceResult;
     requestDispatcher_->addPublicRoute("LOGIN", [this](const QVariantMap &, const QJsonObject &data) {
         return sessions_->login(data);
@@ -121,6 +127,7 @@ void Dispatch::registerRoutes()
 
 QJsonObject Dispatch::handle(const QJsonObject &request)
 {
+    /** TcpServer 每帧入口。路由/鉴权/幂等全在 RequestDispatcher。 */
     return requestDispatcher_->handle(request);
 }
 

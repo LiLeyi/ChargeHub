@@ -5,13 +5,33 @@
  * @file appstyle.h
  * @brief 统一 Fusion。关闭 ComboBox 原生弹出层，避免 WSLg/虚拟机里下拉错位。
  *
- * 管理端、用户端 main 里 app.setStyle(new ChargeHubStyle)。只影响观感。
+ * 管理端、用户端 main 里先 chargehubPrepareIme()，再 app.setStyle(new ChargeHubStyle)。
  */
 
+#include <QFile>
 #include <QProxyStyle>
 #include <QStyleFactory>
 #include <QStyleOption>
 #include <QWidget>
+
+/** WSLg 的 Windows 输入法进不了 Qt/xcb。有 ibus 时在 QApplication 之前挂上。 */
+inline void chargehubPrepareIme()
+{
+#ifdef Q_OS_LINUX
+    if (!QFile::exists(QStringLiteral("/usr/bin/ibus-daemon")))
+        return;
+    const auto setIfEmpty = [](const char *key, const char *val) {
+        if (!qgetenv(key).isEmpty())
+            return;
+        qputenv(key, val);
+    };
+    setIfEmpty("QT_IM_MODULE", "ibus");
+    setIfEmpty("GTK_IM_MODULE", "ibus");
+    setIfEmpty("XMODIFIERS", "@im=ibus");
+#else
+    (void)0;
+#endif
+}
 
 // 统一 Fusion 风格，下拉框不用系统原生弹出层
 class ChargeHubStyle : public QProxyStyle {

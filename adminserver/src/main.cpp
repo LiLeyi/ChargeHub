@@ -1,11 +1,14 @@
 /**
  * @file main.cpp
- * @brief 管理端进程入口：锁实例 → 开库 → Dispatch → 听 8888 → 登录框 → MainWindow。
+ * @brief 管理端进程入口：锁实例 → 开库 → Dispatch → 听 0.0.0.0:8888 → 管理员登录框 → MainWindow。
  *
- * 【职责】保证全组只有一份服务器（写库 + TCP）。
- * 【原理】文件锁 chargehub.lock；TcpServer 在登录框之前就开始听，方便烟测。
- * 【协作】创建 Database、Dispatch、TcpServer、MainWindow。用户端填底栏 IP:8888。
- * 【详见】docs/模块与协作说明.md
+ * 【职责】保证全组只有一份写库 + TCP 服务器。
+ * 【原理】
+ *   文件锁 data/chargehub.lock；TcpServer 在登录框弹出之前就已经 listen，
+ *   因此烟测脚本可以在运营人员还没点「登录」时对 8888 发 LOGIN。
+ *   管理员账号走 admin 表、同进程函数，不占用用户 Socket type。
+ * 【协作】用户端填底栏显示的「IP:8888」。大屏是另一个进程 :5000。
+ * 【详见】docs/模块与协作说明.md 、protocol/messages.md
  */
 #include "appstyle.h"
 #include "database.h"
@@ -34,6 +37,7 @@
 
 int main(int argc, char *argv[])
 {
+    chargehubPrepareIme();
     QApplication app(argc, argv);
     app.setStyle(new ChargeHubStyle);
     QPalette pal;
@@ -180,6 +184,7 @@ QToolTip { background:#18181B; color:#FAFAFA; border:1px solid #3F3F46; padding:
     }
     Dispatch dispatch(&db);
     TcpServer server(&dispatch);
+    /** 所有网卡 8888；失败通常是第二份管理端。必须在登录框之前听，方便烟测。 */
     if (!server.listen(QHostAddress::Any, 8888)) {
         uiError(nullptr, QString::fromUtf8("端口被占用"),
                 QString::fromUtf8(

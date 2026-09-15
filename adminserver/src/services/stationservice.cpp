@@ -23,16 +23,15 @@ static double haversine(double lat1, double lng1, double lat2, double lng2)
 
 struct GeoHit {
     QString name;
-    double lat = 39.728167;
-    double lng = 116.170492;
+    double lat = 39.9644;
+    double lng = 116.3473;
     bool matched = false;
 };
 
 static GeoHit resolveAddress(const QString &raw, const QVector<QVariantMap> &stations)
 {
     const QString t = raw.trimmed();
-    GeoHit best{QString::fromUtf8("北京理工大学良乡校区（默认）"),
-                39.728167, 116.170492, false};
+    GeoHit best{QString::fromUtf8("北京理工大学（默认）"), 39.9644, 116.3473, false};
     if (t.isEmpty())
         return best;
     int score = 0;
@@ -117,12 +116,12 @@ QJsonObject StationService::queryStations(const QVariantMap &user, const QJsonOb
         hit = resolveAddress(address, stations);
     } else if (user.contains("loc_lat")) {
         hit.lat = user.value("loc_lat").toDouble();
-        hit.lng = user.contains("loc_lng") ? user.value("loc_lng").toDouble() : 116.170492;
+        hit.lng = user.contains("loc_lng") ? user.value("loc_lng").toDouble() : 116.3473;
         hit.name = QString::fromUtf8("上次定位");
         hit.matched = true;
     } else if (data.contains("lat") || data.contains("lng")) {
-        hit.lat = data.value("lat").toDouble(39.728167);
-        hit.lng = data.value("lng").toDouble(116.170492);
+        hit.lat = data.value("lat").toDouble(39.9644);
+        hit.lng = data.value("lng").toDouble(116.3473);
         hit.name = QString::fromUtf8("指定坐标");
         hit.matched = true;
     } else {
@@ -136,7 +135,6 @@ QJsonObject StationService::queryStations(const QVariantMap &user, const QJsonOb
     const double lng = hit.lng;
     const double radius = data.value("radiusKm").toDouble(20);
     QJsonArray arr;
-    QJsonArray mapStations;
     QVector<QJsonObject> tmp;
     QVector<QJsonObject> nearPiles;
     for (const auto &s : stations) {
@@ -174,14 +172,6 @@ QJsonObject StationService::queryStations(const QVariantMap &user, const QJsonOb
                 });
             }
         }
-        mapStations.append(QJsonObject{
-            {"id", s.value("id").toInt()},
-            {"name", s.value("name").toString()},
-            {"lat", s.value("lat").toDouble()},
-            {"lng", s.value("lng").toDouble()},
-            {"idlePiles", idle},
-            {"totalPiles", piles.size()},
-        });
         if (radius > 0 && dist > radius)
             continue;
         auto rev = db_->one("SELECT IFNULL(AVG(score),0) AS a, COUNT(*) AS n FROM station_review WHERE station_id=?",
@@ -224,7 +214,6 @@ QJsonObject StationService::queryStations(const QVariantMap &user, const QJsonOb
         nearby.append(nearPiles[i]);
     return QJsonObject{
         {"stations", arr},
-        {"mapStations", mapStations},
         {"nearbyPiles", nearby},
         {"location", QJsonObject{
              {"address", address},

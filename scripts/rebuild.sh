@@ -68,6 +68,14 @@ PY
   mkdir -p "$APP/admin" "$APP/user" "$APP/dashboard"
   install -m 755 "$DST/adminserver/adminserver" "$APP/admin/adminserver"
   install -m 755 "$DST/userclient/userclient" "$APP/user/userclient"
+  python3 - <<PY
+from pathlib import Path
+src = Path("$SRC/scripts/chargehub-ime.sh")
+dst = Path("$APP/ime.sh")
+if src.is_file():
+    dst.write_bytes(src.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
+    dst.chmod(0o755)
+PY
   cat > "$APP/admin/run.sh" <<'EOF'
 #!/bin/bash
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -77,6 +85,10 @@ export QT_QPA_PLATFORM=xcb
 mkdir -p "$HOME/.xdg-runtime"
 chmod 700 "$HOME/.xdg-runtime"
 export XDG_RUNTIME_DIR="$HOME/.xdg-runtime"
+IME_SH="$(cd "$DIR/.." && pwd)/ime.sh"
+if [ -f "$IME_SH" ]; then
+  . "$IME_SH"
+fi
 cd "$DIR"
 exec "$DIR/adminserver"
 EOF
@@ -89,6 +101,10 @@ export QT_QPA_PLATFORM=xcb
 mkdir -p "$HOME/.xdg-runtime"
 chmod 700 "$HOME/.xdg-runtime"
 export XDG_RUNTIME_DIR="$HOME/.xdg-runtime"
+IME_SH="$(cd "$DIR/.." && pwd)/ime.sh"
+if [ -f "$IME_SH" ]; then
+  . "$IME_SH"
+fi
 exec "$DIR/userclient"
 EOF
   chmod +x "$APP/admin/run.sh" "$APP/user/run.sh"

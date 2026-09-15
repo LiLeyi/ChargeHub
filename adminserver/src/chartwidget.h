@@ -14,7 +14,6 @@
 class LineChart : public QWidget {
     Q_OBJECT
 public:
-    /** @param parent Qt 父控件；初始化最小尺寸。 */
     explicit LineChart(QWidget *parent = nullptr);
     /**
      * 设置折线点。
@@ -23,7 +22,7 @@ public:
      */
     void setPoints(const QJsonArray &pts, const QString &title = QString());
 protected:
-    /** @param e Qt 重绘事件；按点计算坐标轴范围，画折线、网格和标题。 */
+    /** 按点计算坐标轴范围，画折线、网格和标题。 */
     void paintEvent(QPaintEvent *e) override;
 private:
     QJsonArray points_;
@@ -34,12 +33,10 @@ private:
 class BarChart : public QWidget {
     Q_OBJECT
 public:
-    /** @param parent Qt 父控件；初始化最小尺寸。 */
     explicit BarChart(QWidget *parent = nullptr);
-    /** @param bars `[{name,value},…]` 或数值数组；保存后触发重绘。 */
+    /** bars 为 [{name,value},…] 或数值数组。 */
     void setBars(const QJsonArray &bars);
 protected:
-    /** @param e Qt 重绘事件；按最大值归一化柱高并绘制标签。 */
     void paintEvent(QPaintEvent *e) override;
 private:
     QJsonArray bars_;
@@ -49,12 +46,10 @@ private:
 class PieChart : public QWidget {
     Q_OBJECT
 public:
-    /** @param parent Qt 父控件；初始化最小尺寸。 */
     explicit PieChart(QWidget *parent = nullptr);
-    /** @param slices `[{name,value},…]`；保存后按总和计算角度并重绘。 */
+    /** slices 为 [{name,value},…]；会按总和算角度。 */
     void setSlices(const QJsonArray &slices);
 protected:
-    /** @param e Qt 重绘事件；将各值/总值映射为扇区角度并绘制图例。 */
     void paintEvent(QPaintEvent *e) override;
 private:
     QJsonArray slices_;

@@ -1,3 +1,11 @@
+/**
+ * @file sessionservice.cpp
+ * @brief Socket 会话实现：手机号登录/注册、UUID token、30 分钟滑动过期、公开用户 JSON。
+ *
+ * kSessionTtlSeconds=30*60 与 protocol/messages.md「管理端重启后 30 分钟内旧 token 仍可用」一致。
+ * kPersistIntervalSeconds=5*60：HEARTBEAT/业务帧会滑动内存时间，但不每帧写 session 表。
+ * 密码 SHA256 hex；LOGIN 不要求大小写数字，REGISTER 才要求，以免演示号登不进去。
+ */
 #include "sessionservice.h"
 
 #include "database.h"
@@ -50,6 +58,7 @@ SessionService::SessionService(Database *db) : db_(db)
     loadSessions();
 }
 
+/** 启动时灌内存。过期行 DELETE，避免重启后用死人的 token。 */
 void SessionService::loadSessions()
 {
     const qint64 now = QDateTime::currentSecsSinceEpoch();
@@ -78,6 +87,7 @@ void SessionService::forgetSession(const QString &token) const
     db_->execute("DELETE FROM session WHERE token=?", {token});
 }
 
+/** UUID 去花括号与横线，写入内存三表并 INSERT OR REPLACE session。 */
 QString SessionService::issueToken(int userId)
 {
     const QString token = QUuid::createUuid().toString().remove('{').remove('}').remove('-');
@@ -92,6 +102,10 @@ QString SessionService::issueToken(int userId)
     return token;
 }
 
+/**
+ * @brief token → userId，并滑动过期。
+ * 未命中内存会读 session 表（管理端刚重启的 30 分钟窗口）。过期则删库返回 0。
+ */
 int SessionService::userIdOfToken(const QString &token) const
 {
     if (token.isEmpty())
@@ -151,6 +165,10 @@ int SessionService::userIdOfToken(const QString &token) const
     return userId;
 }
 
+/**
+ * @brief 给路由用：先 userIdOfToken，再读 user 行拦注销/冻结。
+ * 401 文案统一「登录已失效」；403 区分注销与冻结。
+ */
 AuthenticationResult SessionService::authenticate(const QString &token) const
 {
     const int userId = userIdOfToken(token);
@@ -198,8 +216,8 @@ QJsonObject SessionService::publicUser(const QVariantMap &user) const
         {"status", user.value("status").toString()},
         {"createdAt", user.value("created_at").toString()},
         {"address", user.value("address").toString()},
-        {"lat", user.contains("loc_lat") ? user.value("loc_lat").toDouble() : 39.728167},
-        {"lng", user.contains("loc_lng") ? user.value("loc_lng").toDouble() : 116.170492},
+        {"lat", user.contains("loc_lat") ? user.value("loc_lat").toDouble() : 39.9644},
+        {"lng", user.contains("loc_lng") ? user.value("loc_lng").toDouble() : 116.3473},
         {"closeReason", user.value("close_reason").toString()},
         {"closedAt", user.value("closed_at").toString()},
     };
@@ -213,6 +231,10 @@ QJsonObject SessionService::publicUser(const QVariantMap &user) const
     return object;
 }
 
+/**
+ * @brief LOGIN。手机号 1[3-9]xxxxxxxxx；密码只检查 6～20 位。
+ * 成功签发 token。演示号弱密码可以过，与 REGISTER 刻意不对称。
+ */
 ServiceResult SessionService::login(const QJsonObject &data)
 {
     const QString phone = data.value("phone").toString().trimmed();
@@ -237,6 +259,9 @@ ServiceResult SessionService::login(const QJsonObject &data)
                              QString::fromUtf8("登录成功"));
 }
 
+/**
+ * @brief REGISTER。强密码；已注销手机号 409 不可再注册。昵称默认「用户」+ 手机后四位，余额 0。
+ */
 ServiceResult SessionService::registerUser(const QJsonObject &data)
 {
     const QString phone = data.value("phone").toString().trimmed();

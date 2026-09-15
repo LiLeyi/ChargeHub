@@ -13,6 +13,7 @@
 
 int main(int argc, char *argv[])
 {
+    chargehubPrepareIme();
     QApplication app(argc, argv);
     app.setStyle(new ChargeHubStyle);
     app.setStyleSheet(QString::fromUtf8(R"(

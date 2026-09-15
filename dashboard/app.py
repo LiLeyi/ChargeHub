@@ -1,14 +1,28 @@
 # -*- coding: utf-8 -*-
-"""ChargeHub 运营大屏：只读 SQLite + ECharts。
+"""ChargeHub 运营大屏 HTTP：只读 SQLite + Spark JSON + 静态页。
 
-职责：给浏览器提供 JSON，不改订单、余额、桩状态。
-原理：Flask 读管理端同一份 WAL 库；表缺了就返回空列表。
-协作：管理端 MainWindow.openDash 启动本进程；Dispatch 写库，本模块只读。
-接口：GET / 、/api/overview 、/api/analysis 、/api/tariffs
-详见 docs/模块与协作说明.md
+【职责】
+    给浏览器提供只读 API 和 Vue 3 + ECharts 大屏。不改订单、余额、桩状态，
+    也没有 POST/PUT/DELETE。用户端业务仍走 TCP :8888，见 protocol/messages.md。
+
+【传输】
+    Flask 默认绑定 0.0.0.0:5000。本机浏览器 http://127.0.0.1:5000 ；
+    组员用管理端底栏同网段 IP:5000。与 Socket 端口 8888 互不替代。
+
+【数据】
+    业务 KPI 读管理端同一份 chargehub.db（WAL）。
+    智能分析图表优先读 bigdata/output/spark_report.json（Hadoop + PySpark）。
+    没有 Spark 输出时回退 analysis_* 表。表缺失时 q() 返回 []，页面不崩。
+
+【协作】
+    管理端 MainWindow.openDash 拉起本进程。Spark 作业见 bigdata/README.md。
+    分时电价的启用/改价只在运营 GUI。
+
+【接口】docs/接口约定.md 、 docs/大数据与智能分析.md
 """
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import sys
@@ -19,12 +33,24 @@ from flask import Flask, jsonify, send_from_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = Path(__file__).resolve().parent
+DIST = STATIC / "dist"
+PAGE_ROOT = DIST if (DIST / "index.html").is_file() else STATIC
 
-app = Flask(__name__, static_folder=str(STATIC), static_url_path="")
+app = Flask(__name__, static_folder=str(PAGE_ROOT), static_url_path="")
 
 
 def findDb() -> Path:
-    """按环境变量和管理端常见路径找只读库，找不到则返回默认路径。"""
+    """按环境变量和管理端常见路径找只读库，找不到则返回默认路径（调用方再决定是否 init）。
+
+    探测顺序：
+      1. CHARGEHUB_DB（作业/脚本显式指定）
+      2. 与本文件相对的 admin/data、adminserver/data
+      3. ~/ChargeHub-Linux/admin/data（WSL 成品）
+      4. ~/projects/ChargeHub/... 与 /home/bit/...（开发树）
+      5. 工程 database/chargehub.db
+
+    不创建文件、不写库。
+    """
     home = Path.home()
     env = Path(os.environ["CHARGEHUB_DB"]) if os.environ.get("CHARGEHUB_DB") else None
     candidates = [
@@ -45,8 +71,40 @@ def findDb() -> Path:
 DB = findDb()
 
 
+def findSparkReport() -> Path | None:
+    """定位 PySpark 写出的 spark_report.json，找不到返回 None。"""
+    home = Path.home()
+    env = Path(os.environ["CHARGEHUB_SPARK_OUT"]) if os.environ.get("CHARGEHUB_SPARK_OUT") else None
+    cands = [
+        env / "spark_report.json" if env else None,
+        ROOT / "bigdata" / "output" / "spark_report.json",
+        home / "ChargeHub-Linux" / "bigdata" / "output" / "spark_report.json",
+        home / "projects" / "ChargeHub" / "bigdata" / "output" / "spark_report.json",
+        Path("/mnt/d/大三小学期/计算机软件实训/ChargeHub/bigdata/output/spark_report.json"),
+    ]
+    for p in cands:
+        if p is not None and p.exists():
+            return p
+    return None
+
+
+def loadSpark() -> dict:
+    """读 Spark 报告；文件坏了或没有则 {}。"""
+    p = findSparkReport()
+    if p is None:
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def q(sql: str, args=()):
-    """只读查询；表不存在时返回空列表，避免大屏崩溃。"""
+    """只读查询；表/列不存在时返回空列表，避免大屏因分析表未刷新而 500。
+
+    每次调用独立 connect，用完关闭。row_factory=Row 转 dict，键为 SQL 列名（下划线）。
+    对外 JSON 再在视图函数里改成小驼峰。
+    """
     conn = sqlite3.connect(str(DB))
     conn.row_factory = sqlite3.Row
     try:
@@ -65,12 +123,12 @@ def one(sql: str, args=()):
 
 @app.get("/")
 def index():
-    """大屏网页本体，静态 index.html。"""
-    return send_from_directory(STATIC, "index.html")
+    """GET / → Vue 3 + ECharts 大屏（优先 dashboard/dist）。不是 API。"""
+    return send_from_directory(PAGE_ROOT, "index.html")
 
 
 def summed(where, args=()):
-    """已完成订单按条件汇总金额、电量、笔数。只读。"""
+    """已完成订单按条件汇总金额（元）、电量、笔数。只读 charge_order。"""
     row = one(
         f"SELECT IFNULL(SUM(amount),0) AS s, IFNULL(SUM(energy_kwh),0) AS e, COUNT(*) AS n "
         f"FROM charge_order WHERE status='已完成' AND {where}",
@@ -81,7 +139,13 @@ def summed(where, args=()):
 
 @app.get("/api/overview")
 def overview():
-    """今日/本月营收、桩状态、趋势和地图点。不写库。"""
+    """GET /api/overview：今日/本月/累计营收、桩状态、闲置排行、地图点、7/30 日趋势、站营收、24h 分布。
+
+    响应 JSON 主要键：today/month/total（amount,energy,orders）、users、activeToday、
+    piles[{status,n}]、idleRank、geo[{name,lng,lat,idle,total,amount,orders}]、
+    trend、trend30、mix、hours、updated、db。
+    全部 SELECT，无写。金额单位元。
+    """
     today = datetime.now().strftime("%Y-%m-%d")
     month = datetime.now().strftime("%Y-%m")
     piles = q("SELECT status, COUNT(*) AS n FROM pile GROUP BY status")
@@ -153,25 +217,31 @@ def overview():
             "hours": hours,
             "updated": datetime.now().strftime("%H:%M:%S"),
             "db": str(DB),
+            "spark": loadSpark().get("kpis") or {},
         }
     )
 
 
 @app.get("/api/analysis")
 def analysis():
-    """预测、告警、调度建议，全部来自分析表。"""
-    report = one("SELECT * FROM analysis_report ORDER BY id DESC LIMIT 1")
-    hourly = q(
+    """GET /api/analysis：负荷预测、分时、故障风险、告警、调度建议。
+
+    优先合并 Spark 报告（模型指标、告警、调度）；没有则只读 analysis_* 表。
+    不在这里跑 ML。作业入口是 bigdata/scripts/run_pipeline.sh。
+    """
+    spark = loadSpark()
+    report = spark.get("report") or one("SELECT * FROM analysis_report ORDER BY id DESC LIMIT 1")
+    hourly = spark.get("hourly") or q(
         "SELECT h.hour, h.pred_kwh, s.name FROM hourly_load h "
         "JOIN station s ON s.id=h.station_id ORDER BY s.id, h.hour"
     )
-    forecasts = q(
+    forecasts = spark.get("forecasts") or q(
         "SELECT f.*, s.name FROM load_forecast f JOIN station s ON s.id=f.station_id "
         "ORDER BY f.station_id, f.horizon_hours"
     )
-    risks = q("SELECT * FROM fault_risk ORDER BY score DESC LIMIT 12")
-    alerts = q("SELECT * FROM analysis_alert ORDER BY id DESC LIMIT 16")
-    plan = q("SELECT * FROM dispatch_plan ORDER BY priority")
+    risks = spark.get("battery") or q("SELECT * FROM fault_risk ORDER BY score DESC LIMIT 12")
+    alerts = spark.get("alerts") or q("SELECT * FROM analysis_alert ORDER BY id DESC LIMIT 16")
+    plan = spark.get("plan") or q("SELECT * FROM dispatch_plan ORDER BY priority")
     return jsonify(
         {
             "report": report,
@@ -180,14 +250,53 @@ def analysis():
             "risks": risks,
             "alerts": alerts,
             "plan": plan,
+            "engine": (spark.get("kpis") or {}).get("engine") or "sqlite",
             "updated": datetime.now().strftime("%H:%M:%S"),
+        }
+    )
+
+
+@app.get("/api/bigdata")
+def bigdata():
+    """GET /api/bigdata：Hadoop/PySpark 全量结果（聚类、热力、电池、平台）。
+
+    没有 spark_report.json 时返回 ready=false，大屏仍显示业务 KPI。
+    """
+    spark = loadSpark()
+    p = findSparkReport()
+    return jsonify(
+        {
+            "ready": bool(spark),
+            "path": str(p) if p else "",
+            "kpis": spark.get("kpis") or {},
+            "report": spark.get("report") or {},
+            "hourly": spark.get("hourly") or [],
+            "forecasts": spark.get("forecasts") or [],
+            "clusters": spark.get("clusters") or [],
+            "battery": spark.get("battery") or [],
+            "alerts": spark.get("alerts") or [],
+            "plan": spark.get("plan") or [],
+            "heatmap": spark.get("heatmap") or [],
+            "platform": spark.get("platform") or [],
+            "topStations": spark.get("top_stations") or [],
+            "models": spark.get("models") or [],
+            "importances": spark.get("importances") or [],
+            "anomalies": spark.get("anomalies") or {},
+            "rfm": spark.get("rfm") or [],
+            "rules": spark.get("rules") or [],
+            "peakClf": spark.get("peak_clf") or {},
+            "updated": spark.get("updated") or datetime.now().strftime("%H:%M:%S"),
         }
     )
 
 
 @app.get("/api/tariffs")
 def tariffs():
-    """分时电价只读列表，供大屏展示。"""
+    """GET /api/tariffs：分时电价只读列表。无规则的站不会出现。
+
+    每行：stationId, station, startHour, endHour, pricePerKwh, label（峰/平/谷）。
+    启用/改价只在管理端 GUI，本接口不提供 POST。
+    """
     rows = q(
         "SELECT t.station_id, s.name, t.start_hour, t.end_hour, t.price_per_kwh, t.label "
         "FROM tariff_rule t JOIN station s ON s.id=t.station_id "
@@ -212,7 +321,7 @@ def tariffs():
 
 
 def main() -> None:
-    """找库、必要时灌演示数据，然后 0.0.0.0:5000 只读服务。"""
+    """找库；文件不存在才 init 演示库。然后 0.0.0.0:5000 只读服务（debug=False）。"""
     global DB
     DB = findDb()
     if not DB.exists():

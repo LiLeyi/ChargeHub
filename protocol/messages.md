@@ -3,7 +3,15 @@
 传输：TCP。管理端监听 **所有网卡的 8888 端口**（`0.0.0.0:8888`）。  
 用户端在登录页填写 `IP:8888`。同一台电脑填 `127.0.0.1:8888`，连组里服务器填那台电脑的局域网 IP。
 
-帧：`4 字节大端长度 + UTF-8 JSON`（见 `common/protocol.*`）。
+帧：`4 字节大端长度 + UTF-8 JSON`。实现与逐字段说明见源码注释：
+
+- 编解码：`common/protocol.h`
+- 用户端发送：`userclient/src/client.h`、`usercontroller.h`
+- 接入/推送/断线：`adminserver/src/tcpserver.h`
+- 路由、鉴权、8 秒幂等：`adminserver/src/transport/requestdispatcher.h`
+- token：`adminserver/src/services/sessionservice.h`
+- 出站地图/天气 HTTP（不是本协议）：`common/tencentapi.h`
+- 大屏 HTTP：`dashboard/app.py`、`docs/接口约定.md`
 
 管理端 GUI **不走** 这套报文，同进程直接调 `Dispatch`。所以 **不能** 再开第二个管理端去「远程操作」同一台服务器——第二份管理端会自己再开一套库、再抢 8888。
 

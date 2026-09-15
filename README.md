@@ -97,7 +97,7 @@ bash scripts/rebuild.sh
 | `ChargeHub/scripts/打开运营后台.bat` | 管理端 | `admin` / `123456` |
 | `ChargeHub/scripts/打开用户端.bat` | 用户端 | `13800138000` / `123456`，服务器 `127.0.0.1:8888` |
 
-用户端先点「连接」，连上后用顶栏切换 **登录** / **注册**。登录用演示号即可；注册须满足密码规则（6～20 位且含大小写字母和数字），成功后写入管理端数据库并自动登录。窗口是手机竖屏，底栏切换找桩 / 预约 / 充电 / 订单 / 我的。  
+用户端先点「连接」，连上后用顶栏切换 **登录** / **注册**。登录用演示号即可；注册须满足密码规则（6～20 位且含大小写字母和数字），成功后写入管理端数据库并自动登录。窗口是手机竖屏，底栏切换找桩 / 预约 / 充电 / 订单 / 我的。昵称、住址、评价、电站名称等可在窗口内用 **Ctrl+空格** 切换拼音（Linux ibus，不是任务栏的微软拼音）；手机号和密码仍用英文数字。  
 大屏：管理端里 **运营决策大屏** → **打开 Web 大屏**。
 
 ### 2.2 建议自测顺序（约 10 分钟）
@@ -347,7 +347,7 @@ cd ~/ChargeHub-Linux/user && ./run.sh
 用户端 userclient          管理端 adminserver                 大屏 / 预测
 ┌─────────────┐  TCP:8888  ┌──────────────────────┐ 只读db  ┌──────────┐
 │ UserWindow  │ ─────────► │ TcpServer            │ ◄───── │dashboard │
-│ Client      │  JSON帧    │ Dispatch  → Database │        │ ml/      │
+│ Client      │  JSON帧    │ Dispatch  → Database │        │ bigdata/ |
 └─────────────┘            │ MainWindow（同进程）  │        └──────────┘
                            └──────────────────────┘
 ```
@@ -366,12 +366,17 @@ cd ~/ChargeHub-Linux/user && ./run.sh
 | `adminserver/src/database.*` | SQLite 唯一写入口 | `query` / `one` / `execute` / `transaction` | 改表要同步 `schema.sql` |
 | `adminserver/src/mainwindow.*` | 运营界面 | 直接调 Dispatch，不走 Socket | 后台页面 |
 | `adminserver/src/chartwidget.*` | 自绘图表 | `setPoints` / `setBars` / `setSlices` | 仅显示 |
-| `dashboard/app.py` | Flask 只读大屏 | `GET /` `GET /api/overview` `GET /api/analysis` | 图表页；禁止 UPDATE 订单 |
-| `ml/forecast.py` | 负荷预测 | 写 `load_forecast` 等分析表 | 不改余额、不改桩状态 |
+| `dashboard/app.py` | Flask 只读大屏 | `GET /` `GET /api/overview` `GET /api/analysis` `GET /api/bigdata` | 业务 KPI + Spark 图；禁止 UPDATE 订单 |
+| `bigdata/spark_analyze.py` | Hadoop + PySpark | GBT 负荷、KMeans 聚类、电池风险 | 只写 `bigdata/output` 与分析表 |
+| `ml/forecast.py` | 预测入口 | 有 Spark 报告则导入，否则小时均值 | 不改余额、不改桩状态 |
 | `database/schema.sql` | 表结构说明 | 与 C++ 建表一致 | 改库先改此文件再改 C++ |
 | `protocol/messages.md` | 报文 type 列表 | 联调对照表 | 新增 type 必须更新此文件 |
 
-用户端报文的 type、字段、错误码见 **`protocol/messages.md`**。新增接口的步骤：
+用户端报文的 type、字段、错误码见 **`protocol/messages.md`**。  
+最终答辩介绍（怎么讲、演示怎么点、评委怎么问）：**`docs/最终答辩-网络通信与外部接口.pdf`**。  
+从 IP/TCP 讲到本项目 Socket 与 HTTP：**`docs/Socket网络编程详解.pdf`**。逐文件技术对照：`docs/网络通信与外部接口.pdf`。
+
+新增接口的步骤：
 
 1. 在 `messages.md` 加一行 type
 2. 在对应 `services/` 里实现，并在 `Dispatch::registerRoutes` 注册
@@ -449,6 +454,7 @@ bash /mnt/hgfs/ChargeHub/scripts/rebuild.sh
 | 浏览器打不开大屏 | 服务器上要跑 `python3 app.py`；别人请用 `http://服务器IP:5000` 不要用 127.0.0.1 |
 | 双击 `run.sh` 没反应 | 还没编过，回到第 1 节 |
 | 改代码没变化 | 必须再跑 `rebuild.sh` |
+| 输入框打不出中文 | 在 ChargeHub 窗口里按 **Ctrl+空格** 开拼音（不要用 Windows 任务栏输入法）。仍不行则关掉两个窗口再双击 bat 重开 |
 
 ---
 

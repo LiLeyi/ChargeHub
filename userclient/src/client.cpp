@@ -1,6 +1,9 @@
 /**
  * @file client.cpp
- * @brief 用户端套接字。构造时接好 connected/readyRead/error，界面只调 connectTo/request。
+ * @brief 用户端套接字实现。界面 / UserController 只调 connectTo 与 request，禁止直接操作 sock_。
+ *
+ * Qt5.15 前后错误信号不同：新版 errorOccurred，旧版 overload 的 error。两种都转到 failed。
+ * readyRead 里必须把 readAll 一次喂给 Protocol，再 while 取包，否则粘包会积在内核缓冲。
  */
 #include "client.h"
 
@@ -25,20 +28,30 @@ Client::Client(QObject *parent) : QObject(parent)
 #endif
 }
 
-/** 先 abort 旧连接再拨号，避免两根线抢同一 Client。 */
+/**
+ * @brief 先 abort 旧连接再 connectToHost，保证本 Client 始终最多一根 TCP。
+ * @note 不在这里发 LOGIN；等 connected 信号后由 UserController::sendPendingAuth。
+ */
 void Client::connectTo(const QString &host, quint16 port)
 {
     sock_.abort();
     sock_.connectToHost(host, port);
 }
 
-/** 仅当套接字已 Connected 才算通，连接中不算。 */
+/**
+ * @brief 仅 ConnectedState 为通。HostLookup / Connecting 时 request 必须失败而不是写半包。
+ */
 bool Client::isConnected() const
 {
     return sock_.state() == QAbstractSocket::ConnectedState;
 }
 
-/** 未连接只报错，不把半包写进套接字。 */
+/**
+ * @brief 组 {type,seq,role:user,token,data} 后 pack 写出。
+ *
+ * seq 在判断连接之前就自增：即使没连上，返回值仍是「本应使用的序号」，
+ * 调用方若用 seq 做日志不会和下一次成功发送撞号。未连接不 write。
+ */
 int Client::request(const QString &type, const QJsonObject &data, const QString &token)
 {
     ++seq_;

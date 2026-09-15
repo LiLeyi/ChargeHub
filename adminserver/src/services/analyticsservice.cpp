@@ -7,14 +7,46 @@
 #include <algorithm>
 #include <QDate>
 #include <QDateTime>
+#include <QDir>
+#include <QFile>
 #include <QHash>
 #include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMap>
 #include <QPair>
 #include <QtMath>
 static qint64 fenOf(double yuan) { return qRound(yuan * 100.0); }
 static double money(double value) { return fenOf(value) / 100.0; }
 static QString nowStr() { return QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"); }
+
+static QString sparkReportPath()
+{
+    const QString env = qEnvironmentVariable("CHARGEHUB_SPARK_OUT");
+    QStringList cands;
+    if (!env.isEmpty())
+        cands << env + "/spark_report.json";
+    const QString home = QDir::homePath();
+    cands << home + "/ChargeHub-Linux/bigdata/output/spark_report.json"
+          << home + "/projects/ChargeHub/bigdata/output/spark_report.json"
+          << QString::fromUtf8("/mnt/d/大三小学期/计算机软件实训/ChargeHub/bigdata/output/spark_report.json");
+    for (const auto &p : cands) {
+        if (QFile::exists(p))
+            return p;
+    }
+    return {};
+}
+
+static QJsonObject loadSparkReport()
+{
+    const QString path = sparkReportPath();
+    if (path.isEmpty())
+        return {};
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly))
+        return {};
+    return QJsonDocument::fromJson(f.readAll()).object();
+}
 AnalyticsService::AnalyticsService(Database *db) : db_(db) {}
 
 QJsonObject AnalyticsService::salesSummary() const
@@ -147,6 +179,63 @@ int AnalyticsService::refreshForecast()
     db_->execute("DELETE FROM analysis_alert");
     db_->execute("DELETE FROM dispatch_plan");
     db_->execute("DELETE FROM analysis_report");
+
+    const QJsonObject spark = loadSparkReport();
+    if (!spark.isEmpty() && spark.value("report").isObject()) {
+        const QJsonObject report = spark.value("report").toObject();
+        const QJsonArray hourly = spark.value("hourly").toArray();
+        const QJsonArray forecasts = spark.value("forecasts").toArray();
+        const QJsonArray battery = spark.value("battery").toArray();
+        const QJsonArray alerts = spark.value("alerts").toArray();
+        const QJsonArray plan = spark.value("plan").toArray();
+        const auto stations = db_->query("SELECT id, name FROM station");
+        int n = 0;
+        for (const auto &s : stations) {
+            const int sid = s.value("id").toInt();
+            for (const auto &h : hourly) {
+                const auto o = h.toObject();
+                db_->execute("INSERT INTO hourly_load(station_id,hour,pred_kwh,created_at) VALUES(?,?,?,?)",
+                             {sid, o.value("hour").toInt(), o.value("pred_kwh").toDouble(), t});
+            }
+            for (const auto &f : forecasts) {
+                const auto o = f.toObject();
+                db_->execute(
+                    "INSERT INTO load_forecast(station_id,horizon_hours,pred_kwh,pred_idle,peak_hour,created_at) VALUES(?,?,?,?,?,?)",
+                    {sid, o.value("horizon_hours").toInt(), o.value("pred_kwh").toDouble(),
+                     o.value("pred_idle").toInt(), o.value("peak_hour").toString(), t});
+                ++n;
+            }
+        }
+        int bi = 0;
+        for (const auto &b : battery) {
+            if (bi++ >= 20)
+                break;
+            const auto o = b.toObject();
+            QString pileNo = o.value("sessionId").toString();
+            if (pileNo.isEmpty())
+                pileNo = QString::number(o.value("sessionId").toDouble(), 'f', 0);
+            db_->execute("INSERT INTO fault_risk(pile_no,station,score,level,reason,created_at) VALUES(?,?,?,?,?,?)",
+                         {pileNo, o.value("station").toString(),
+                          o.value("score").toDouble(), o.value("level").toString(), o.value("reason").toString(), t});
+        }
+        for (const auto &a : alerts) {
+            const auto o = a.toObject();
+            db_->execute("INSERT INTO analysis_alert(level,title,detail,created_at) VALUES(?,?,?,?)",
+                         {o.value("level").toString(), o.value("title").toString(), o.value("detail").toString(), t});
+        }
+        for (const auto &p : plan) {
+            const auto o = p.toObject();
+            db_->execute("INSERT INTO dispatch_plan(station,recommend,priority,reason,created_at) VALUES(?,?,?,?,?)",
+                         {o.value("station").toString(), o.value("recommend").toDouble(),
+                          o.value("priority").toInt(), o.value("reason").toString(), t});
+        }
+        db_->execute(
+            "INSERT INTO analysis_report(model_version,mae,rmse,sample_n,weather,created_at) VALUES(?,?,?,?,?,?)",
+            {report.value("model_version").toString(), report.value("mae").toDouble(),
+             report.value("rmse").toDouble(), report.value("sample_n").toInt(),
+             report.value("weather").toString(), t});
+        return n;
+    }
 
     const auto hist = db_->query(
         "SELECT p.station_id AS sid, CAST(substr(o.start_time,12,2) AS INTEGER) AS hh, "

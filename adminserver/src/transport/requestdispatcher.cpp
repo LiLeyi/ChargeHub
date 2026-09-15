@@ -1,3 +1,10 @@
+/**
+ * @file requestdispatcher.cpp
+ * @brief 路由表查找、token 鉴权、8 秒写操作幂等、统一信封。
+ *
+ * 常量 kIdempotencySeconds=8 与 protocol/messages.md 一致。
+ * 缓存不持久化：进程退出即丢失，管理端重启后连点保护从头开始（token 本身仍可从 session 表恢复）。
+ */
 #include "requestdispatcher.h"
 
 #include "services/sessionservice.h"
@@ -12,17 +19,22 @@ constexpr int kMaxCachedResponses = 200;
 
 RequestDispatcher::RequestDispatcher(SessionService *sessions) : sessions_(sessions) {}
 
+/** @brief 公开路由：不鉴权、不幂等。后注册同名 type 会覆盖前者。 */
 void RequestDispatcher::addPublicRoute(const QString &type, const Handler &handler)
 {
     routes_.insert(type, {false, false, handler});
 }
 
+/** @brief 登录后路由。mutating=true 的 type 见头文件列表。 */
 void RequestDispatcher::addAuthenticatedRoute(const QString &type, bool mutating,
                                                const Handler &handler)
 {
     routes_.insert(type, {true, mutating, handler});
 }
 
+/**
+ * @brief 组装线协议响应。失败时不回传 result.data，避免调用方把半成品当成功展示。
+ */
 QJsonObject RequestDispatcher::response(const QString &type, int seq,
                                         const ServiceResult &result)
 {
@@ -56,6 +68,11 @@ void RequestDispatcher::storeIdempotent(const QString &key, const QJsonObject &v
     }
 }
 
+/**
+ * @brief 一帧请求的完整处理。顺序：查表 →（写操作）幂等命中 → 鉴权 → handler → 缓存成功写。
+ *
+ * 未知 type 也先鉴权：未登录的乱 type 得到 401 而不是 400，避免被用来探测路由表。
+ */
 QJsonObject RequestDispatcher::handle(const QJsonObject &request)
 {
     const QString type = request.value("type").toString();

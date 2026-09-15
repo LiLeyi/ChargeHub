@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""充电负荷预测。
+"""充电负荷预测入口。
 
-职责：写入 load_forecast 等分析表，给大屏和管理端智能分析页。
-原理：按电站+星期+小时聚合已完成订单；样本少用均值。
-协作：不改 charge_order / user.balance / pile.status。管理端 refreshForecast 也会重算一部分。
+优先导入 Hadoop/PySpark 报告（bigdata/apply_results.py），没有报告时回退小时均值。
+只写分析表，不改 charge_order / user.balance / pile.status。
 """
 from __future__ import annotations
 
@@ -19,6 +18,21 @@ ROOT = Path(__file__).resolve().parents[1]
 DB = ROOT / "adminserver" / "data" / "chargehub.db"
 if not DB.exists():
     DB = ROOT / "database" / "chargehub.db"
+
+
+def trySparkApply() -> bool:
+    """若已有 spark_report.json，写入分析表并返回 True。"""
+    sys.path.insert(0, str(ROOT / "bigdata"))
+    try:
+        from apply_results import main as apply_main
+        from paths import report_path
+    except Exception as exc:
+        print("spark import skipped:", exc)
+        return False
+    if not report_path().exists():
+        return False
+    apply_main()
+    return True
 
 
 def loadHourly(conn) -> dict:
@@ -88,7 +102,10 @@ def trySklearn(conn) -> bool:
 
 
 def main() -> None:
-    """打开库（没有则 initDb），尝试 sklearn，再 predict 写分析表。"""
+    """先尝试 Spark 报告；否则打开库做小时均值回退。"""
+    if trySparkApply():
+        print("forecast from spark_report.json")
+        return
     if not DB.exists():
         sys.path.insert(0, str(ROOT))
         from database.initdb import initDb
