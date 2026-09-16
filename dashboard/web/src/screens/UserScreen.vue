@@ -1,4 +1,8 @@
 <script setup>
+/**
+ * 用户分析：价值分群饼图、K 轮廓曲线、雷达、RFM 散点、画像卡片。
+ * 高价值/流失预警人数可以不相等，逻辑在 enrich_dashboard.rfm_pack。
+ */
 import PanelCard from "../components/PanelCard.vue";
 import ChartBox from "../components/ChartBox.vue";
 

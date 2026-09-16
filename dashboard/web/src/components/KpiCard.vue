@@ -1,4 +1,5 @@
 <script setup>
+/** 顶栏 KPI：label / 大数字 / 灰色 hint，左侧色条用 CSS 变量 --c。 */
 defineProps({
   label: { type: String, required: true },
   value: { type: String, required: true },

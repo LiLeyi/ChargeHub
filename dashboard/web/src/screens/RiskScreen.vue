@@ -1,4 +1,9 @@
 <script setup>
+/**
+ * 风险调度：两行五列。上：营收排行 | 24h 负荷（跨三列） | 告警。
+ * 下：闲置/负荷、热力、电站 PCA 画像、RFM 条、桩状态/特征。
+ * 不要用三行四列：中间行高度不够会把热力/散点压扁。
+ */
 import PanelCard from "../components/PanelCard.vue";
 import ChartBox from "../components/ChartBox.vue";
 import RankList from "../components/RankList.vue";

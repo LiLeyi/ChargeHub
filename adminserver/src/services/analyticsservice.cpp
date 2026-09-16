@@ -20,6 +20,7 @@ static qint64 fenOf(double yuan) { return qRound(yuan * 100.0); }
 static double money(double value) { return fenOf(value) / 100.0; }
 static QString nowStr() { return QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"); }
 
+/** 按环境变量和常见 WSL 路径找 spark_report.json，没有则空串。 */
 static QString sparkReportPath()
 {
     const QString env = qEnvironmentVariable("CHARGEHUB_SPARK_OUT");
@@ -37,6 +38,7 @@ static QString sparkReportPath()
     return {};
 }
 
+/** 读 Spark JSON；文件打不开或不是对象时返回空，refreshForecast 走小时均值回退。 */
 static QJsonObject loadSparkReport()
 {
     const QString path = sparkReportPath();
@@ -154,6 +156,8 @@ QVariantMap AnalyticsService::latestReport() const
 
 int AnalyticsService::refreshForecast()
 {
+    /* 只重建分析派生表。有 spark_report.json 则导入（与 apply_results.py 同口径），
+     * 否则按已完成订单做星期×小时均值。绝不 UPDATE charge_order / user / pile。 */
     const QString t = nowStr();
     const int nowH = QDateTime::currentDateTime().time().hour();
     const int wd = QDateTime::currentDateTime().date().dayOfWeek();

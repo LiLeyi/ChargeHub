@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""从 SQLite 导出订单 CSV，供课程数据集提交。"""
+"""从 SQLite 导出订单 CSV，供课程「数据集」提交，不是 Spark 输入。
+
+Spark 读的是 dataset/big（由 expand_dataset 从 nvv2t 扩样），不要把本文件
+输出当成大屏数据源。
+"""
 from __future__ import annotations
 
 import csv
@@ -15,6 +19,7 @@ OUT = ROOT / "docs" / "数据集-第X组.csv"
 
 
 def main() -> None:
+    """写出 docs/数据集-第X组.csv（utf-8-sig，Excel 可直接开）。"""
     if not DB.exists():
         sys.path.insert(0, str(ROOT))
         from database.initdb import initDb

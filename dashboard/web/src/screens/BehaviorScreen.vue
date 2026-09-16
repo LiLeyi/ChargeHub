@@ -1,4 +1,9 @@
 <script setup>
+/**
+ * 充电行为：24h 分布、SOC、时长、费用、电站效率散点。
+ * 效率图横轴是订单量（对数），纵轴均电量，颜色=Spark 画像；
+ * 不能用均时长×均电量，扩样后那两维几乎常数会挤成一团。
+ */
 import PanelCard from "../components/PanelCard.vue";
 import ChartBox from "../components/ChartBox.vue";
 

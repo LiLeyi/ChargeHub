@@ -1,8 +1,13 @@
 # -*- coding: utf-8 -*-
 """把 Spark JSON 写入分析派生表，供 Qt 智能分析和大屏 /api/analysis 使用。
 
-只写 hourly_load / load_forecast / fault_risk / analysis_alert / dispatch_plan / analysis_report。
-不改 charge_order、user.balance、pile.status。
+【只允许写的表】hourly_load / load_forecast / fault_risk / analysis_alert /
+dispatch_plan / analysis_report。先 DELETE 再 INSERT。
+【禁止写】charge_order、user.balance、pile.status。
+
+管理端 AnalyticsService::refreshForecast 优先读同一份 JSON 走等价逻辑；
+本脚本给命令行 / ml/forecast.py 调用。小时负荷会对每个业务库电站复制一份
+全网曲线（示意调度，不是逐站独立模型）。
 """
 from __future__ import annotations
 
@@ -22,6 +27,7 @@ from paths import report_path  # noqa: E402
 
 
 def find_db() -> Path:
+    """找管理端 SQLite，顺序与 dashboard.app.findDb 对齐。"""
     home = Path(os.environ.get("HOME") or Path.home())
     env = Path(os.environ["CHARGEHUB_DB"]) if os.environ.get("CHARGEHUB_DB") else None
     cands = [
@@ -39,6 +45,7 @@ def find_db() -> Path:
 
 
 def load_bundle() -> dict:
+    """读 spark_report.json；没有文件则退出，提示先跑 spark_analyze.py。"""
     p = report_path()
     if not p.exists():
         raise SystemExit(f"找不到 {p}，请先跑 spark_analyze.py")
@@ -46,6 +53,7 @@ def load_bundle() -> dict:
 
 
 def main() -> None:
+    """清空六张分析表后写入 Spark 结果，commit 一次。"""
     bundle = load_bundle()
     db = find_db()
     if not db.exists():

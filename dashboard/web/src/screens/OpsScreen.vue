@@ -1,4 +1,9 @@
 <script setup>
+/**
+ * 运营总览：日趋势、平台饼图、地区对比、热门站、星期分布。
+ * option 由 useDashboard.apply 从 charts.daily / platform / regions 和
+ * bigdata.topStations 填好。本文件只排 CSS Grid。
+ */
 import PanelCard from "../components/PanelCard.vue";
 import ChartBox from "../components/ChartBox.vue";
 

@@ -1,4 +1,5 @@
 <script setup>
+/** 营收排行条。items[].name/value/pct，pct 已在 apply() 按最大值归一。 */
 defineProps({
   items: { type: Array, default: () => [] },
 });

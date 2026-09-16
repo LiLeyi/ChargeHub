@@ -1,4 +1,8 @@
 <script setup>
+/**
+ * 数据质量：清洗问题、电池有效率、漏斗、峰谷、设施、电压-SOC、日 SOC、温度。
+ * 数据来自 enrich_dashboard.scan_quality（原始 nvv2t + dsv13r2），不是扩样表。
+ */
 import PanelCard from "../components/PanelCard.vue";
 import ChartBox from "../components/ChartBox.vue";
 

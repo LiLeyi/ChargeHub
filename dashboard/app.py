@@ -72,7 +72,11 @@ DB = findDb()
 
 
 def findSparkReport() -> Path | None:
-    """定位 PySpark 写出的 spark_report.json，找不到返回 None。"""
+    """定位 PySpark 写出的 spark_report.json。
+
+    顺序：CHARGEHUB_SPARK_OUT、作业树 bigdata/output、WSL 成品目录、作业盘绝对路径。
+    找不到返回 None，/api/bigdata 会 ready=false，业务 KPI 仍可从 SQLite 来。
+    """
     home = Path.home()
     env = Path(os.environ["CHARGEHUB_SPARK_OUT"]) if os.environ.get("CHARGEHUB_SPARK_OUT") else None
     cands = [
@@ -89,7 +93,7 @@ def findSparkReport() -> Path | None:
 
 
 def findDashCharts() -> Path | None:
-    """定位 enrich_dashboard 写出的 dash_charts.json。"""
+    """定位 enrich_dashboard 写出的 dash_charts.json，优先和 spark 报告同目录。"""
     spark = findSparkReport()
     cands = []
     if spark:
@@ -110,7 +114,7 @@ def findDashCharts() -> Path | None:
 
 
 def loadSpark() -> dict:
-    """读 Spark 报告；文件坏了或没有则 {}。"""
+    """读 Spark 报告；文件坏了或没有则 {}，调用方按空字典走 SQLite 回退。"""
     p = findSparkReport()
     if p is None:
         return {}
@@ -124,7 +128,11 @@ _CHARTS: dict | None = None
 
 
 def loadCharts() -> dict:
-    """读多屏图表汇总；没有文件时尝试现场 enrich（只算一次，缓存）。"""
+    """读多屏图表汇总。进程内缓存 _CHARTS，避免每次 HTTP 扫 22 万行。
+
+    无文件时 import enrich_dashboard.build() 现场算一次；enrich 失败则 {}。
+    重启 Flask（deploydash.sh 会杀进程）才能看到新 JSON。
+    """
     global _CHARTS
     if _CHARTS is not None:
         return _CHARTS
@@ -304,9 +312,11 @@ def analysis():
 
 @app.get("/api/bigdata")
 def bigdata():
-    """GET /api/bigdata：Hadoop/PySpark 全量结果（聚类、热力、电池、平台）。
+    """GET /api/bigdata：Hadoop/PySpark 全量结果 + charts 多屏载荷。
 
-    没有 spark_report.json 时返回 ready=false，大屏仍显示业务 KPI。
+    没有 spark_report.json 时 ready=false，Vue 仍用 overview 的营收 KPI。
+    charts 来自 dash_charts.json（日趋势、SOC、RFM 散点、7 日预测、质量漏斗）。
+    键名与 spark_analyze.main 写出的 JSON 对齐：clusters/heatmap/models/rfm/...
     """
     spark = loadSpark()
     p = findSparkReport()

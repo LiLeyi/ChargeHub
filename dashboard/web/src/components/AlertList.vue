@@ -1,4 +1,5 @@
 <script setup>
+/** 告警列表。level 含「严重」时用玫瑰点。数据来自 Spark build_alerts。 */
 defineProps({
   items: { type: Array, default: () => [] },
 });

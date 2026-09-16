@@ -1,6 +1,14 @@
 import { nextTick, onBeforeUnmount, onMounted, watch } from "vue";
 import * as echarts from "echarts";
 
+/**
+ * 把 ECharts 绑到某个 DOM ref。option 一变就 setOption(true 替换)。
+ * ResizeObserver + window.resize 防止 CSS Grid 改高度后图还是扁的。
+ * 卸载时 dispose，避免切 tab 泄漏 canvas。
+ *
+ * @param {import('vue').Ref<HTMLElement|null>} elRef
+ * @param {import('vue').Ref<object>} optionRef
+ */
 export function useEcharts(elRef, optionRef) {
   let chart = null;
   let ro = null;

@@ -1,4 +1,8 @@
 <script setup>
+/**
+ * 智能预测：未来 7 天、测试集对照、模型 MAE/RMSE/R²、最佳模型卡片。
+ * 数字来自 charts.forecast7 / Spark models，本页不跑训练。
+ */
 import PanelCard from "../components/PanelCard.vue";
 import ChartBox from "../components/ChartBox.vue";
 

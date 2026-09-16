@@ -1,4 +1,9 @@
 <script setup>
+/**
+ * 大屏壳：顶栏品牌 + 六页签 + KPI 条 + 舞台。
+ * 质量页换用 qualityKpis，其余页用 Spark/业务 KPI。
+ * 不在这里画图，只按 dash.tab 挂载对应 Screen。
+ */
 import { reactive } from "vue";
 import KpiCard from "./components/KpiCard.vue";
 import OpsScreen from "./screens/OpsScreen.vue";

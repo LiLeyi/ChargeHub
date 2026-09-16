@@ -1,9 +1,29 @@
 # -*- coding: utf-8 -*-
 """ChargeHub PySpark 作业：读扩样 CSV（HDFS 或 file://），多模型挖掘后只写 JSON。
 
-算法：GBT / 随机森林 / 线性回归、KMeans+PCA、IsolationForest、
-用户 RFM、晚高峰逻辑回归、FP-Growth、电池风险。
-不改 charge_order / user.balance / pile.status。
+【在整条链里的位置】
+    expand_dataset.py  →  dataset/big/*.csv
+    ingest_hdfs.sh     →  hdfs://localhost:9000/chargehub/dataset（可选）
+    spark_analyze.py   →  bigdata/output/spark_report.json   ← 本文件
+    enrich_dashboard.py→  dash_charts.json（多屏 ECharts 用的扁平表）
+    apply_results.py   →  只写 analysis_* 派生表
+    dashboard/app.py   →  GET /api/bigdata 把 JSON 交给 Vue
+
+【算法一览（答辩按函数拆）】
+    train_models          GBT / 随机森林 / 线性回归，预测单次 kWh
+    cluster_stations      电站 KMeans + PCA 二维投影
+    name_station_clusters 按簇间相对特征命名，禁止绝对阈值
+    battery_risks         遥测温差/压差/电流/低 SOC 加权
+    hourly_and_forecast   24h 历史负荷 + GBT 点预测合成
+    peak_classifier       逻辑回归：是否 17–21 点开充
+    isolation_anomalies   IsolationForest，没有该 API 时用 99 分位回退
+    user_rfm              用户 Recency/Frequency/Monetary + KMeans
+    assoc_rules           FP-Growth：星期 × 峰谷 × 平台
+    weekday_hour          热力图源数据
+    platform_mix/station_rank  运营总览用的聚合
+
+【硬约束】不改 charge_order / user.balance / pile.status。
+入口：spark-submit spark_analyze.py 或 bigdata/scripts/run_pipeline.sh。
 """
 from __future__ import annotations
 
@@ -21,6 +41,12 @@ from paths import big_dir, hdfs_uri, input_uri, out_dir  # noqa: E402
 
 
 def _spark():
+    """创建 SparkSession：Asia/Shanghai、可配 shuffle 分区与 driver 内存。
+
+    默认 master=local[*]，可用 SPARK_MASTER 改成 yarn。日志压到 WARN，避免刷屏。
+    返回:
+        pyspark.sql.SparkSession
+    """
     from pyspark.sql import SparkSession
 
     builder = (
@@ -37,6 +63,7 @@ def _spark():
 
 
 def _try_hdfs_ls(spark, uri: str) -> bool:
+    """用 Hadoop FileSystem.exists 探测 HDFS 路径。NameNode 不通或无文件返回 False。"""
     try:
         jvm = spark._jvm
         conf = spark._jsc.hadoopConfiguration()
@@ -48,7 +75,16 @@ def _try_hdfs_ls(spark, uri: str) -> bool:
 
 
 def resolve_input(spark) -> tuple[str, str]:
-    """返回 (sessions_uri, engine_label)。HDFS 有数据用 HDFS，否则本地 file://。"""
+    """选定作业输入根目录。
+
+    优先 HDFS（paths.input_uri()/sessions.csv），NameNode 没起来或没 ingest
+    则退回 file:///dataset/big。大屏 KPI 里的 engine 字段来自这里的标签。
+
+    返回:
+        (根 URI 不含文件名, "HDFS" 或 "LOCAL")
+    抛出:
+        FileNotFoundError: 两边都没有 sessions.csv，需先跑 expand_dataset.py
+    """
     local = big_dir()
     local_s = (local / "sessions.csv").as_posix()
     hdfs_base = input_uri()
@@ -63,6 +99,10 @@ def resolve_input(spark) -> tuple[str, str]:
 
 
 def weekday_index(name):
+    """把英文星期列映射成 1–7 的 Spark Column，供回归/分类特征使用。
+
+    兼容 Tues/Tue、Thurs/Thu。无法识别时为 0，后续 VectorAssembler 仍可 keep。
+    """
     from pyspark.sql.functions import when, col
 
     n = name
@@ -81,6 +121,19 @@ def weekday_index(name):
 
 
 def train_models(spark, sessions):
+    """对照训练三种回归器，预测单次充电量 kwhTotal。
+
+    特征：小时、星期、充电时长、电站/平台索引、是否车队、设施类型。
+    80/20 划分，seed=20260912。主模型 GBT（maxDepth=5, maxIter=20），
+    对照随机森林与带 L2 的线性回归。特征贡献取随机森林 featureImportances。
+
+    参数:
+        spark: SparkSession（本函数主要用 sessions 的 DataFrame）
+        sessions: 扩样后的会话表
+    返回:
+        (gbt_pipeline_model, metrics_dict)
+        metrics 含 mae/rmse/r2、train_n/test_n、models 三模型列表、importances
+    """
     from pyspark.ml import Pipeline
     from pyspark.ml.evaluation import RegressionEvaluator
     from pyspark.ml.feature import StringIndexer, VectorAssembler
@@ -169,6 +222,16 @@ def train_models(spark, sessions):
 
 
 def cluster_stations(spark, sessions, stations):
+    """按站聚合后做 KMeans，并用 PCA 压到二维供散点图。
+
+    每站向量 = [会话数, 均电量, 均时长, 均费用, 均开始小时]，先 StandardScaler。
+    站数≥8 时 k=4，否则 2 或 3。只输出会话量最高的 80 站，避免图上点爆炸。
+    簇名交给 name_station_clusters：扩样后均电量几乎相同，不能用绝对阈值。
+
+    返回:
+        (rows, labels_by_cluster_id, k)
+        rows 每项含 pca_x/pca_y/label/sessions，供风险调度「电站画像」。
+    """
     from pyspark.ml.clustering import KMeans
     from pyspark.ml.feature import PCA, StandardScaler, VectorAssembler
     from pyspark.sql.functions import avg, col, count
@@ -239,7 +302,18 @@ def cluster_stations(spark, sessions, stations):
 def name_station_clusters(cluster_avg) -> dict:
     """每个簇只给一个互不相同的名字，按簇间相对特征，不用绝对阈值。
 
-    扩样后各站均电量/均时段很接近，再用 hour>=17、kwh<8 会把 4 簇全叫成慢充短时型。
+    扩样后各站均电量约 5.8 kWh、均开充约 14 点，再用 hour>=17、kwh<8
+    会把 4 簇全叫成「慢充短时型」。因此：
+      1) 平均开充最晚 → 晚高峰型
+      2) 会话最少     → 低频型
+      3) 均电量最低   → 慢充短时型
+      4) 剩下的       → 均衡高负荷型
+    每个名字最多用一次。
+
+    参数:
+        cluster_avg: groupBy(cluster) 后的行，需有 h/n/kwh 字段
+    返回:
+        {cluster_id: 中文画像名}
     """
     remaining = {int(r["cluster"]): r for r in cluster_avg}
     labels: dict[int, str] = {}
@@ -263,6 +337,13 @@ def name_station_clusters(cluster_avg) -> dict:
 
 
 def battery_risks(spark, telemetry, sessions, stations):
+    """给电池包遥测打风险分，输出前 40 条高分会话。
+
+    分数加权（经验权，非再训练）：最高温/70×0.28 + 单体压差/0.08×0.30
+    + 电流/80×0.18 + (100-SOC)/100×0.14 + 温差/12×0.10。
+    ≥0.72 高风险，≥0.45 需关注。reason 只列出越阈值的指标，便于告警文案。
+    经 sessionId 关联电站名。只读 telemetry.csv，不改桩状态。
+    """
     from pyspark.sql.functions import abs as spark_abs, col, desc
 
     t = telemetry.select(
@@ -327,6 +408,16 @@ def battery_risks(spark, telemetry, sessions, stations):
 
 
 def hourly_and_forecast(spark, sessions, gbt_model):
+    """合成全网 24 点历史负荷与 1/6/24 小时窗口预测。
+
+    历史：各小时电量合计 / 90 天，折成「典型一天」。
+    预测：用已训练 GBT 对高频代表站×24 小时做单次 kWh 点预测，再按
+    0.55×典型日 + 0.45×(点预测×到站频次) 混合。高峰时刻取 curve 最大的小时。
+    闲置桩粗估 pred_idle = max(0, 18 - pred_kwh/40)，仅作调度示意。
+
+    返回:
+        hourly_out, forecasts, curve(24 个 pred), peak 文案, 当前小时
+    """
     from pyspark.sql.functions import avg, col, count, sum as spark_sum
 
     hourly = (
@@ -415,6 +506,11 @@ def hourly_and_forecast(spark, sessions, gbt_model):
 
 
 def peak_classifier(spark, sessions):
+    """二分类：开充是否落在 17–21 点（晚高峰）。
+
+    逻辑回归，特征为时长/电量/费用/星期/平台/设施。输出 AUC、准确率、高峰占比。
+    大屏「智能预测」页用 peak_clf 展示分类能力，不参与扣费。
+    """
     from pyspark.ml import Pipeline
     from pyspark.ml.classification import LogisticRegression
     from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
@@ -451,6 +547,12 @@ def peak_classifier(spark, sessions):
 
 
 def isolation_anomalies(spark, sessions):
+    """会话异常检测：电量、时长、费用、小时四维。
+
+    优先 IsolationForest(contamination=0.03)；部分 Spark 发行包没有该 API
+    时退回 kWh 或时长超过 99 分位。只在 25% 子样本上拟合，再列出 24 条样例
+    和按小时计数，供风险调度告警「异常 n」。
+    """
     from pyspark.ml.feature import VectorAssembler
     from pyspark.sql.functions import col, count
 
@@ -497,6 +599,12 @@ def isolation_anomalies(spark, sessions):
 
 
 def user_rfm(spark, sessions):
+    """Spark 侧用户 RFM：近度、频次、金额三维 KMeans（k=3，人少则 2）。
+
+    簇命名：金额×频次最大 → 高价值；近度最大（最久没来）→ 沉默；其余 → 常规。
+    注意：大屏「用户分析」主图走 enrich_dashboard.rfm_pack（高价值/流失预警
+    评分，人数可以不相等）。本函数结果仍写入 spark_report.rfm，风险页条形图会用。
+    """
     from pyspark.ml.clustering import KMeans
     from pyspark.ml.feature import StandardScaler, VectorAssembler
     from pyspark.sql.functions import avg, col, count, datediff, lit, max as spark_max, min as spark_min, sum as spark_sum, to_timestamp
@@ -551,6 +659,11 @@ def user_rfm(spark, sessions):
 
 
 def assoc_rules(spark, sessions):
+    """FP-Growth 关联规则：购物篮 = [星期, 早/晚/平峰, 平台]。
+
+    minSupport=0.04, minConfidence=0.35，取置信度最高 8 条。
+    用于说明「周五+晚高峰 → android」这类共现，不驱动调度写库。
+    """
     from pyspark.ml.fpm import FPGrowth
     from pyspark.sql.functions import array, col, lit, when
 
@@ -578,6 +691,7 @@ def assoc_rules(spark, sessions):
 
 
 def weekday_hour(spark, sessions):
+    """星期 × 小时电量合计，供风险调度热力图。Tue/Thu 规范成 Tues/Thurs。"""
     from pyspark.sql.functions import col, sum as spark_sum
 
     rows = (
@@ -597,6 +711,7 @@ def weekday_hour(spark, sessions):
 
 
 def platform_mix(spark, sessions):
+    """平台订单计数，给运营总览饼图。"""
     from pyspark.sql.functions import col, count
 
     rows = sessions.groupBy(col("platform")).agg(count("*").alias("n")).collect()
@@ -604,6 +719,7 @@ def platform_mix(spark, sessions):
 
 
 def station_rank(spark, sessions, stations):
+    """按累计电量排 TOP12 电站，供运营总览柱状图。"""
     from pyspark.sql.functions import col, count, sum as spark_sum
 
     names = stations.select(
@@ -629,6 +745,11 @@ def station_rank(spark, sessions, stations):
 
 
 def build_alerts(metrics, clusters, battery, curve, kpis, anomalies=None):
+    """由模型结果拼几条只读告警，不写业务表。
+
+    高峰负荷≥80 kWh → 严重；电池高风险条数 → 严重；
+    IsolationForest 计数 → 一般；晚高峰型站数量 → 一般。
+    """
     alerts = []
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     peak = max(curve) if curve else 0
@@ -647,11 +768,18 @@ def build_alerts(metrics, clusters, battery, curve, kpis, anomalies=None):
 
 
 def write_json(path: Path, obj) -> None:
+    """UTF-8 JSON，ensure_ascii=False，供 Flask / Qt 直接 json.loads。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def main() -> None:
+    """串起全部挖掘模块，写出 spark_report.json，并调用 enrich_dashboard。
+
+    读 sessions/stations/telemetry → 训练与聚类 → 组装 kpis/report/plan
+    → 写 output/spark_report.json → 再跑 enrich 生成 dash_charts.json。
+    失败时只打印 INPUT/路径，不碰 SQLite 业务表。
+    """
     spark = _spark()
     base, engine = resolve_input(spark)
     print("INPUT", base, engine)

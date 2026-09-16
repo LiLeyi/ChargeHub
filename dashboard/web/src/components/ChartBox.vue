@@ -1,4 +1,5 @@
 <script setup>
+/** ECharts 容器：宽高 100%，option 经 useEcharts 绑定。 */
 import { computed, ref } from "vue";
 import { useEcharts } from "../composables/useEcharts.js";
 

@@ -1,7 +1,20 @@
 # -*- coding: utf-8 -*-
-"""从 dataset/big CSV + spark_report 汇总多屏图表 JSON。
+"""从 dataset/big CSV + spark_report 汇总多屏图表 JSON（dash_charts.json）。
 
-只读 CSV，不改订单 / 余额 / 桩状态。供 dashboard GET /api/bigdata 合并。
+【为什么还要 Python 扫一遍 CSV】
+    Spark 报告偏「模型结果」（MAE、簇、异常会话）。大屏还要日趋势、SOC 分箱、
+    RFM 散点、7 日预测、数据质量漏斗。这些用纯 Python 流式扫描 22 万行即可，
+    Flask 启动时若 JSON 缺失会调用 build() 现场算一次并缓存。
+
+【只读】不改订单 / 余额 / 桩状态。输出给 dashboard GET /api/bigdata 的 charts 字段。
+
+【答辩对应页】
+    daily/regions/platform/top     → 运营总览
+    hours/duration/fees/soc/efficiency → 充电行为
+    rfm_extra                      → 用户分析（高价值 vs 流失预警，人数不必相等）
+    forecast7/order_model/kwh_daily_model → 智能预测
+    quality                        → 数据质量
+    k_curve                        → 用户分析 K 值曲线
 """
 from __future__ import annotations
 
@@ -39,6 +52,7 @@ PY_WD = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
 
 def fnum(v, d=0.0) -> float:
+    """把 CSV 单元格转成有限浮点，失败或 inf 返回默认值 d。"""
     try:
         x = float(v)
         return x if math.isfinite(x) else d
@@ -47,6 +61,7 @@ def fnum(v, d=0.0) -> float:
 
 
 def tariff_label(hour: int) -> str:
+    """按郑州峰谷时段把小时打成 谷时/平时/峰时/尖峰，与清洗需求表口径一致。"""
     h = int(hour)
     if h >= 23 or h < 7:
         return "谷时"
@@ -58,6 +73,7 @@ def tariff_label(hour: int) -> str:
 
 
 def col_of(row: dict, *prefixes: str) -> str:
+    """在乱码/空格列名里按前缀找单元格，兼容 GBK 电站表。"""
     for key in row:
         kn = key.replace(" ", "")
         for p in prefixes:
@@ -67,6 +83,7 @@ def col_of(row: dict, *prefixes: str) -> str:
 
 
 def read_csv_rows(path: Path) -> list[dict]:
+    """依次试 utf-8-sig/utf-8/gbk/gb18030。dsv13r2 是 GBK，nvv2t 多为 UTF-8。"""
     if not path.is_file():
         return []
     raw = path.read_bytes()
@@ -79,6 +96,7 @@ def read_csv_rows(path: Path) -> list[dict]:
 
 
 def fix_year(ts: str) -> str:
+    """把 0025- 这类两位年修成 2025-，对应清洗需求「年份异常」。"""
     s = (ts or "").strip()
     if len(s) >= 4 and s[:2] == "00" and s[2:4].isdigit():
         return "20" + s[2:]
@@ -86,6 +104,7 @@ def fix_year(ts: str) -> str:
 
 
 def region_of(address: str, name: str = "") -> str:
+    """从地址或站名抠郑州行政区，供运营总览地区对比。匹配不到返回「其他」。"""
     text = f"{address or ''}{name or ''}"
     m = REGION_RE.search(text)
     if not m:
@@ -101,6 +120,7 @@ def region_of(address: str, name: str = "") -> str:
 
 
 def dur_bucket(hrs: float) -> str:
+    """充电时长分箱，对应行为分析「充电时长分布」。"""
     m = hrs * 60.0
     if m < 30:
         return "0-30分钟"
@@ -116,6 +136,7 @@ def dur_bucket(hrs: float) -> str:
 
 
 def fee_bucket(fee: float) -> str:
+    """费用分箱。≤0.01 元记免费，与质量页「免费订单」口径对齐。"""
     if fee <= 0.01:
         return "免费"
     if fee < 1:
@@ -128,6 +149,7 @@ def fee_bucket(fee: float) -> str:
 
 
 def soc_bucket(soc: float) -> str:
+    """电池 SOC 五档，行为分析与质量页共用。"""
     if soc < 20:
         return "0-20%"
     if soc < 40:
@@ -140,6 +162,7 @@ def soc_bucket(soc: float) -> str:
 
 
 def metrics(y_true, y_pred) -> dict:
+    """纯 Python MAE / RMSE / R²，给 7 日预测对照，不依赖 sklearn。"""
     n = min(len(y_true), len(y_pred))
     if n < 3:
         return {"mae": 0, "rmse": 0, "r2": 0, "n": n}
@@ -155,6 +178,7 @@ def metrics(y_true, y_pred) -> dict:
 
 
 def kmeans(points: list[list[float]], k: int, seed: int = 7, rounds: int = 18):
+    """极简 KMeans（无 Spark），只给 station_k_curve 扫 k=2..6 的轮廓系数。"""
     if not points or k <= 0:
         return [], []
     k = min(k, len(points))
@@ -184,6 +208,7 @@ def kmeans(points: list[list[float]], k: int, seed: int = 7, rounds: int = 18):
 
 
 def silhouette(points: list[list[float]], labels: list[int], k: int) -> float:
+    """平均轮廓系数。簇空或点数<3 返回 0，避免曲线假高峰。"""
     if len(points) < 3 or k < 2:
         return 0.0
     groups = [[] for _ in range(k)]
@@ -214,6 +239,10 @@ def silhouette(points: list[list[float]], labels: list[int], k: int) -> float:
 
 
 def scan_sessions(path: Path) -> dict:
+    """一遍扫描 sessions.csv，累加日/时/星期/时长/费用/平台/设施/峰谷/用户/站。
+
+    返回的字典是后续所有运营/行为/RFM 图的内存底表，避免对 22 万行扫多次。
+    """
     daily = defaultdict(lambda: {"orders": 0, "kwh": 0.0, "fee": 0.0, "hrs": 0.0})
     hours = {h: {"orders": 0, "kwh": 0.0} for h in range(24)}
     weekday = {k: {"orders": 0, "kwh": 0.0} for k in WD_ORDER}
@@ -290,6 +319,7 @@ def scan_sessions(path: Path) -> dict:
 
 
 def scan_stations(path: Path) -> dict:
+    """读电站维表，返回 {stationId: {name, region, address}}。"""
     out = {}
     with path.open("r", encoding="utf-8", newline="") as fh:
         for row in csv.DictReader(fh):
@@ -306,6 +336,7 @@ def scan_stations(path: Path) -> dict:
 
 
 def scan_soc(path: Path) -> dict[str, int]:
+    """扫描遥测 SOC，返回分箱计数。"""
     buckets = defaultdict(int)
     with path.open("r", encoding="utf-8", newline="") as fh:
         reader = csv.DictReader(fh)
@@ -315,7 +346,11 @@ def scan_soc(path: Path) -> dict[str, int]:
 
 
 def scan_quality() -> dict:
-    """按 数据清洗需求表 扫描原始 nvv2t / dsv13r2 / 电站表。"""
+    """按《数据清洗需求表》扫描原始 nvv2t / dsv13r2 / 电站表。
+
+    统计年份异常、电量≤0、时长越界、免费单、电池电压为 0、漏斗四段。
+    只读原始表，不写回 CSV。结果进大屏「数据质量」页。
+    """
     raw = raw_dir()
     root = ROOT / "dataset"
     sessions = read_csv_rows(raw / "nvv2t.csv")
@@ -503,6 +538,7 @@ def scan_quality() -> dict:
 
 
 def densest_days(daily: dict, width: int = 90) -> list[str]:
+    """在日序列里取订单最密的连续 width 天，避免把稀疏日期画进趋势。"""
     days = sorted(daily)
     if not days:
         return []
@@ -520,6 +556,7 @@ def densest_days(daily: dict, width: int = 90) -> list[str]:
 
 
 def build_daily_series(daily: dict) -> list[dict]:
+    """把最密 90 天做成运营总览折线/柱的数据行。"""
     last = densest_days(daily, 90)
     return [
         {
@@ -534,6 +571,7 @@ def build_daily_series(daily: dict) -> list[dict]:
 
 
 def weekday_mean_pred(series: list[dict], key: str) -> list[float]:
+    """用历史同星期均值当订单基线预测（朴素季节性，对照 Spark GBT）。"""
     buckets = defaultdict(list)
     for row in series:
         full = row.get("full") or ""
@@ -555,6 +593,7 @@ def weekday_mean_pred(series: list[dict], key: str) -> list[float]:
 
 
 def ma_pred(values: list[float], win: int = 7) -> list[float]:
+    """前向滑动均值（不含当日），作电量基线预测。"""
     out = []
     for i in range(len(values)):
         sl = values[max(0, i - win) : i]
@@ -563,6 +602,7 @@ def ma_pred(values: list[float], win: int = 7) -> list[float]:
 
 
 def forecast_7(series: list[dict]) -> list[dict]:
+    """拼「最近 7 天实际 + 未来 7 天同星期均值」，给智能预测页。future=True 为预测段。"""
     if len(series) < 7:
         return []
     last = series[-7:]
@@ -621,9 +661,14 @@ def rank01(values: list[float]) -> dict[int, float]:
 
 
 def rfm_pack(users: dict, end_day: str) -> dict:
-    """高价值 = 近+频+额都高；流失预警 = 曾经有消费、但最近很久没来。
+    """用户价值/流失评分，不是按人数三等分。
 
-    不是按人数硬切成三等分。85 个用户时两组人数可以不同。
+    rfm = 0.35*(1-近度风险) + 0.35*频次分 + 0.30*金额分。
+    churn = 近度风险 × (0.45 + 0.30*频次 + 0.25*金额)，避免「从来没充过」被标流失。
+    高价值：rfm 在前约 28% 且最近还来过；流失预警：churn 高且近度高。
+    两组人数可以不相等（例如 24 vs 12）。散点最多 420 点以免卡顿。
+
+    返回 mix/scatter/portraits/radar/axes，供用户分析页。
     """
     try:
         end = datetime.strptime(end_day, "%Y-%m-%d")
@@ -748,6 +793,7 @@ def rfm_pack(users: dict, end_day: str) -> dict:
 
 
 def station_k_curve(sta: dict) -> list[dict]:
+    """对电站 [log订单, 均电量, 均时长] 扫 k=2..6 轮廓系数，给用户分析「K值曲线」。"""
     pts = []
     for sid, s in sta.items():
         if s["orders"] <= 0:
@@ -774,6 +820,11 @@ def station_k_curve(sta: dict) -> list[dict]:
 
 
 def build() -> dict:
+    """组装 dash_charts.json 全部键：KPI、日趋势、分箱、RFM、7 日预测、质量。
+
+    若已有 spark_report.json 会把 GBT/RF/LR 指标并进 best_models。
+    Flask loadCharts() 无文件时会调用本函数。
+    """
     big = big_dir()
     sess = scan_sessions(big / "sessions.csv")
     stations = scan_stations(big / "stations.csv")
@@ -917,6 +968,7 @@ def build() -> dict:
 
 
 def main() -> None:
+    """写出 bigdata/output/dash_charts.json（单行 JSON，UTF-8）。"""
     dest = out_dir()
     dest.mkdir(parents=True, exist_ok=True)
     data = build()

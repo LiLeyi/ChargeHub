@@ -1,3 +1,17 @@
+/**
+ * ChargeHub 运营大屏：把 Flask 三个只读接口转成 ECharts option。
+ *
+ * 数据流（答辩画这张）：
+ *   GET /api/overview  →  SQLite 营收/桩/闲置（业务库，元）
+ *   GET /api/analysis  →  分析表或 Spark 小时负荷/告警
+ *   GET /api/bigdata   →  spark_report + charts（多屏主数据）
+ *
+ * apply() 一次性灌进各 *Opt ref，屏幕组件只收 props，不自己 fetch。
+ * 顶栏六页：ops 运营总览 / behavior 行为 / forecast 预测 /
+ * users 用户 / quality 质量 / risk 风险调度。
+ *
+ * 硬约束：没有任何 POST；刷新只重新 GET。
+ */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 const C = {
@@ -9,6 +23,7 @@ const C = {
   purple: "#8b9cff",
 };
 
+/** 坐标轴皮肤：青绿标签 + 淡网格，所有笛卡尔图共用。 */
 function axis() {
   return {
     axisLabel: { color: "#7aa8a0", fontSize: 10 },
@@ -17,6 +32,7 @@ function axis() {
   };
 }
 
+/** 安全转数字，NaN/Infinity 用默认值，避免 ECharts 整图空白。 */
 function n(v, d = 0) {
   const x = Number(v);
   return Number.isFinite(x) ? x : d;
@@ -31,12 +47,14 @@ function fmtKwh(v) {
   return x.toLocaleString("en-US", { maximumFractionDigits: x >= 100 ? 2 : 2 });
 }
 
+/** GET JSON；非 2xx 抛错，由 refresh().catch(fail) 变成顶栏告警。 */
 async function jget(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${url} ${r.status}`);
   return r.json();
 }
 
+/** ECharts 公共 grid/tooltip/legend。containLabel 防止轴标签把图挤扁。 */
 function base(legend) {
   return {
     textStyle: { color: "#c9ece4", fontSize: 11 },
@@ -48,6 +66,7 @@ function base(legend) {
   };
 }
 
+/** 半环仪表（闲置/负荷）。半径按短边百分比，格子变高时才显得圆。 */
 function gaugeOption(name, value, color) {
   return {
     series: [
@@ -73,6 +92,11 @@ function gaugeOption(name, value, color) {
   };
 }
 
+/**
+ * 大屏组合式入口。App.vue 里 reactive(useDashboard()) 一次，所有屏共享。
+ *
+ * @returns {object} tab/kpis/*Opt/refresh 等，字段名与各 Screen props 对齐
+ */
 export function useDashboard() {
   const tab = ref("ops");
   const clock = ref("--:--:--");
@@ -136,6 +160,11 @@ export function useDashboard() {
     alerts.value = [{ level: "错误", title: errorText.value }];
   }
 
+  /**
+   * 把 overview + analysis + bigdata 三份 JSON 映射成 KPI 和各图 option。
+   * 运营数字优先 charts.kpis / spark kpis；告警优先 Spark alerts。
+   * 电站画像用 PCA；效率散点用订单量对数轴 × 均电量，颜色=画像，避免点挤成一团。
+   */
   function apply(ov, an, bd) {
     const ch = bd?.charts || {};
     const sparkKpi = { ...(bd?.kpis || {}), ...(ch.kpis || {}) };
@@ -831,6 +860,7 @@ export function useDashboard() {
     tempOpt.value = barCat(q.temp || [], C.gold);
   }
 
+  /** 并行拉三个只读接口；失败只改告警文案，不写库。 */
   async function refresh() {
     try {
       const [ov, an, bd] = await Promise.all([jget("/api/overview"), jget("/api/analysis"), jget("/api/bigdata")]);

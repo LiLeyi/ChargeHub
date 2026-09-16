@@ -1,4 +1,5 @@
 <script setup>
+/** 图卡片：标题 + 可伸缩 body。min-height:0 让 Grid 子项把高度传给 ECharts。 */
 defineProps({
   title: { type: String, default: "" },
 });

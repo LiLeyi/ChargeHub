@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-"""充电负荷预测入口。
+"""充电负荷预测入口（管理端「刷新预测」的 Python 旁路）。
 
-优先导入 Hadoop/PySpark 报告（bigdata/apply_results.py），没有报告时回退小时均值。
+优先导入 Hadoop/PySpark 报告（bigdata/apply_results.py），没有报告时
+用已完成订单的「电站×星期×小时」均值填 load_forecast。
 只写分析表，不改 charge_order / user.balance / pile.status。
+正式大屏预测数字以 spark_analyze.hourly_and_forecast 为准。
 """
 from __future__ import annotations
 

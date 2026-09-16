@@ -27,25 +27,30 @@ SEED = 20260912
 
 
 def _open(path: Path):
+    """UTF-8-SIG 打开原始 CSV（Excel 导出常见 BOM）。"""
     return path.open("r", encoding="utf-8-sig", newline="")
 
 
 def load_sessions(raw: Path) -> list[dict]:
+    """读真实会话 nvv2t.csv。"""
     with _open(raw / "nvv2t.csv") as f:
         return list(csv.DictReader(f))
 
 
 def load_stations(raw: Path) -> list[dict]:
+    """读电站维表 nvv2t_md_end.csv。"""
     with _open(raw / "nvv2t_md_end.csv") as f:
         return list(csv.DictReader(f))
 
 
 def load_battery(raw: Path) -> list[dict]:
+    """读电池遥测 dsv13r2.csv（列名含空格和单位）。"""
     with _open(raw / "dsv13r2.csv") as f:
         return list(csv.DictReader(f))
 
 
 def fix_year(ts: str, year_shift: int) -> str:
+    """修正两位年并整体平移 year_shift 年，让扩样落在 2025 演示窗口。"""
     ts = (ts or "").strip()
     if len(ts) < 10:
         return ts
@@ -60,20 +65,24 @@ def fix_year(ts: str, year_shift: int) -> str:
 
 
 def jitter(val: float, scale: float, lo: float, hi: float) -> float:
+    """相对噪声后再夹紧到 [lo, hi]，保持真实分布形状。"""
     x = val * (1.0 + random.uniform(-scale, scale))
     return max(lo, min(hi, x))
 
 
 def weekday_name(dt: datetime) -> str:
+    """与原始表一致的 Mon/Tues/... 拼写。"""
     return ["Mon", "Tues", "Wed", "Thurs", "Fri", "Sat", "Sun"][dt.weekday()]
 
 
 def weekday_flags(dt: datetime) -> dict:
+    """one-hot 星期列，兼容原始宽表。"""
     names = ["Mon", "Tues", "Wed", "Thurs", "Fri", "Sat", "Sun"]
     return {n: 1 if i == dt.weekday() else 0 for i, n in enumerate(names)}
 
 
 def parse_created(raw: str) -> datetime | None:
+    """解析 created 时间，失败返回 None（该行不参与扩样模板）。"""
     raw = fix_year(raw, 0)
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
         try:
@@ -84,6 +93,11 @@ def parse_created(raw: str) -> datetime | None:
 
 
 def expand_sessions(rows: list[dict], target: int) -> list[dict]:
+    """保留全部真实会话，再按站/时段分布加噪声复制到 target 行。
+
+    新 sessionId 从 1 亿起，电量/时长/费用做 jitter，时间平移到 2025。
+    SEED=20260912 可复现。不写业务库。
+    """
     random.seed(SEED)
     out = []
     for i, r in enumerate(rows):
@@ -145,6 +159,7 @@ def expand_sessions(rows: list[dict], target: int) -> list[dict]:
 
 
 def expand_battery(rows: list[dict], session_ids: list[str], target: int) -> list[dict]:
+    """扩电池遥测，esd 尽量挂到已有 sessionId，便于 battery_risks 关联电站。"""
     random.seed(SEED + 1)
     out = []
     for i, r in enumerate(rows):
@@ -174,6 +189,7 @@ def expand_battery(rows: list[dict], session_ids: list[str], target: int) -> lis
 
 
 def write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
+    """UTF-8 无 BOM 写出，Spark 用 encoding=UTF-8 读。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
@@ -182,6 +198,7 @@ def write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
 
 
 def main() -> None:
+    """写出 dataset/big/sessions.csv、stations.csv、telemetry.csv。"""
     parser = argparse.ArgumentParser(description="扩样 ChargeHub 充电大数据集")
     parser.add_argument("--sessions", type=int, default=TARGET_SESSIONS)
     parser.add_argument("--telemetry", type=int, default=TARGET_TELEMETRY)
