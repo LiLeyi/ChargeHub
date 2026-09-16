@@ -1,19 +1,26 @@
 /**
- * ChargeHub 运营大屏：把 Flask 三个只读接口转成 ECharts option。
+ * ChargeHub 运营大屏的数据层（组合式函数）。
  *
- * 数据流（答辩画这张）：
- *   GET /api/overview  →  SQLite 营收/桩/闲置（业务库，元）
- *   GET /api/analysis  →  分析表或 Spark 小时负荷/告警
- *   GET /api/bigdata   →  spark_report + charts（多屏主数据）
+ * 【职责】可视化同学主讲本文件。把 Flask 三个只读 GET 转成 ECharts option
+ * 和 KPI 文案。屏幕 `.vue` 只收 props，禁止自己 fetch、禁止改 series。
  *
- * apply() 一次性灌进各 *Opt ref，屏幕组件只收 props，不自己 fetch。
- * 顶栏六页：ops 运营总览 / behavior 行为 / forecast 预测 /
- * users 用户 / quality 质量 / risk 风险调度。
+ * 【数据流】答辩画这张：
+ *   GET /api/overview  →  SQLite 营收 / 桩状态 / 闲置（业务库，金额单位元）
+ *   GET /api/analysis  →  分析表或 Spark 小时负荷 / 告警（无 Spark JSON 时的回退）
+ *   GET /api/bigdata   →  spark_report + charts（六页主数据）
+ *   apply(ov, an, bd)  →  一次写入全部 *Opt / kpis / ranks / alerts
  *
- * 硬约束：没有任何 POST；刷新只重新 GET。
+ * 【页签】ops 运营总览 / behavior 行为 / forecast 预测 /
+ * users 用户 / quality 质量 / risk 风险调度。切页不重新请求；
+ * 点「刷新数据」或 12 秒定时器才再 GET。质量页顶栏换成 qualityKpis。
+ *
+ * 【硬约束】没有任何 POST / PUT。失败只改告警文案，不写库。
+ *
+ * 【接口字段】见 docs/接口约定.md。键变了只改 apply()，不要改 Screen。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
+/** 全图共用色板：青=主指标，金=预测/排行，玫瑰=告警/流失，蓝=对照柱。 */
 const C = {
   cyan: "#3ee0c3",
   gold: "#f4c36a",
@@ -23,7 +30,10 @@ const C = {
   purple: "#8b9cff",
 };
 
-/** 坐标轴皮肤：青绿标签 + 淡网格，所有笛卡尔图共用。 */
+/**
+ * 笛卡尔坐标系皮肤。所有柱/线/散点共用，保证六页配色一致。
+ * @returns {{axisLabel: object, axisLine: object, splitLine: object}}
+ */
 function axis() {
   return {
     axisLabel: { color: "#7aa8a0", fontSize: 10 },
@@ -32,29 +42,43 @@ function axis() {
   };
 }
 
-/** 安全转数字，NaN/Infinity 用默认值，避免 ECharts 整图空白。 */
+/**
+ * 安全转数字。JSON 缺字段、字符串、NaN 时用默认值，避免 ECharts 整图空白。
+ * @param {*} v 原始值
+ * @param {number} [d=0] 回退
+ * @returns {number}
+ */
 function n(v, d = 0) {
   const x = Number(v);
   return Number.isFinite(x) ? x : d;
 }
 
+/** 整数千分位，给 KPI 大数字用。 */
 function fmtInt(v) {
   return Math.round(n(v)).toLocaleString("en-US");
 }
 
+/** 电量保留两位小数 + 千分位。 */
 function fmtKwh(v) {
   const x = n(v);
   return x.toLocaleString("en-US", { maximumFractionDigits: x >= 100 ? 2 : 2 });
 }
 
-/** GET JSON；非 2xx 抛错，由 refresh().catch(fail) 变成顶栏告警。 */
+/**
+ * 只读 GET JSON。非 2xx 抛错，由 refresh() 的 catch → fail() 写成告警，不写库。
+ * @param {string} url 相对路径，如 `/api/overview`（Vite 开发时代理到 :5000）
+ */
 async function jget(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${url} ${r.status}`);
   return r.json();
 }
 
-/** ECharts 公共 grid/tooltip/legend。containLabel 防止轴标签把图挤扁。 */
+/**
+ * ECharts 公共 grid / tooltip / legend。
+ * containLabel:true 让轴标签占在 grid 内，防止中文站名把图画没。
+ * @param {string[]|undefined} legend 图例名；不传则不要 legend 条，给 grid 多留高度
+ */
 function base(legend) {
   return {
     textStyle: { color: "#c9ece4", fontSize: 11 },
@@ -66,7 +90,13 @@ function base(legend) {
   };
 }
 
-/** 半环仪表（闲置/负荷）。半径按短边百分比，格子变高时才显得圆。 */
+/**
+ * 半环仪表（风险页闲置率 / 负荷率）。
+ * 半径按容器短边百分比，格子够高才显得圆；指针关掉，只看进度弧。
+ * @param {string} name 中心下方标题
+ * @param {number} value 0–100
+ * @param {string} color 进度弧颜色
+ */
 function gaugeOption(name, value, color) {
   return {
     series: [
@@ -93,9 +123,12 @@ function gaugeOption(name, value, color) {
 }
 
 /**
- * 大屏组合式入口。App.vue 里 reactive(useDashboard()) 一次，所有屏共享。
+ * 大屏组合式入口。App.vue 里 `reactive(useDashboard())` 只调一次，六页共享同一份状态。
  *
- * @returns {object} tab/kpis/*Opt/refresh 等，字段名与各 Screen props 对齐
+ * 返回值字段名必须与各 Screen 的 props 对齐（如 dailyOpt → OpsScreen）。
+ * 切 tab 只改 `tab`，不重新 apply；刷新走 refresh()。
+ *
+ * @returns {object} tab / tabs / kpis / qualityKpis / *Opt / refresh
  */
 export function useDashboard() {
   const tab = ref("ops");
@@ -109,6 +142,8 @@ export function useDashboard() {
   const bestModels = ref([]);
   const portraits = ref([]);
   const radarAxes = ref([]);
+  /* 以下 *Opt 全部是 ECharts option。命名必须与对应 Screen 的 props 一致。 */
+  /* 风险页 */
   const loadOpt = ref({});
   const heatOpt = ref({});
   const clusterOpt = ref({});
@@ -117,23 +152,28 @@ export function useDashboard() {
   const featOpt = ref({});
   const idleOpt = ref({});
   const occOpt = ref({});
+  /* 运营总览 */
   const dailyOpt = ref({});
   const platformOpt = ref({});
   const regionOpt = ref({});
   const topOpt = ref({});
   const weekdayOpt = ref({});
+  /* 充电行为 */
   const hourOpt = ref({});
   const socOpt = ref({});
   const durOpt = ref({});
   const feeOpt = ref({});
   const effOpt = ref({});
+  /* 智能预测 */
   const forecastOpt = ref({});
   const testOpt = ref({});
   const modelOpt = ref({});
+  /* 用户分析 */
   const rfmPieOpt = ref({});
   const kCurveOpt = ref({});
   const radarOpt = ref({});
   const rfmScatterOpt = ref({});
+  /* 数据质量（口径问清洗，本层只画） */
   const qualityKpis = ref([]);
   const issueOpt = ref({});
   const batStatusOpt = ref({});
@@ -144,8 +184,10 @@ export function useDashboard() {
   const socDailyOpt = ref({});
   const tempOpt = ref({});
 
+  /** 12 秒轮询句柄；卸载时 clear，避免切走大屏后仍打接口。 */
   let timer = 0;
 
+  /** 顶栏六页签。id 就是 App.vue 里 v-if 的 dash.tab。 */
   const tabs = [
     { id: "ops", label: "运营总览" },
     { id: "behavior", label: "行为分析" },
@@ -155,6 +197,7 @@ export function useDashboard() {
     { id: "risk", label: "风险调度" },
   ];
 
+  /** 接口失败：只改告警列表，不改已画出的 option，页面不白屏。 */
   function fail(err) {
     errorText.value = err?.message || String(err || "数据失败");
     alerts.value = [{ level: "错误", title: errorText.value }];
@@ -162,8 +205,16 @@ export function useDashboard() {
 
   /**
    * 把 overview + analysis + bigdata 三份 JSON 映射成 KPI 和各图 option。
-   * 运营数字优先 charts.kpis / spark kpis；告警优先 Spark alerts。
-   * 电站画像用 PCA；效率散点用订单量对数轴 × 均电量，颜色=画像，避免点挤成一团。
+   *
+   * 优先级：运营数字优先 charts.kpis / spark kpis；告警优先 Spark alerts；
+   * 小时负荷优先 bd.hourly，没有则 an.hourly。
+   * 电站画像：有 pca_x/pca_y 用 PCA 两轴，否则回退「会话 × 均电量」。
+   * 效率散点：横轴 log(订单量)、纵轴均电量、颜色=画像。不能用均时长×均电量
+   * （扩样后那两维几乎常数，点会挤成一团）。
+   *
+   * @param {object} ov GET /api/overview
+   * @param {object} an GET /api/analysis
+   * @param {object} bd GET /api/bigdata（含 report 键与 charts 扁平表）
    */
   function apply(ov, an, bd) {
     const ch = bd?.charts || {};
@@ -176,6 +227,7 @@ export function useDashboard() {
     const to = sparkKpi.date_to || "";
     dateRange.value = from && to ? `${from} 至 ${to}` : "";
     const hint = dateRange.value;
+    // 顶栏 6 张 KPI（质量页会被 qualityKpis 替换）。订单/电量来自 Spark，桩数来自业务库。
     kpis.value = [
       { key: "orders", label: "有效充电订单", value: fmtInt(sparkKpi.orders || sparkKpi.sessions), hint, color: C.cyan },
       { key: "kwh", label: "累计充电量", value: `${fmtKwh(sparkKpi.kwh_total)} kWh`, hint, color: C.cyan },
@@ -197,10 +249,12 @@ export function useDashboard() {
       },
     ];
 
+    // 风险页营收排行：pct 按最大值归一成 0–100，RankList 用它画底条宽度。
     const mix = (ov.mix || []).map((s) => ({ name: s.name, value: Math.round(n(s.value)) }));
     const maxMix = Math.max(1, ...mix.map((s) => s.value));
     ranks.value = mix.map((s) => ({ ...s, pct: Math.round((s.value / maxMix) * 100) }));
 
+    // 风险页半环：闲置率 = 空闲桩 / 总桩；负荷率 = 100 - 闲置（夹在 8–96，避免弧看不见）。
     let idle = 0;
     let total = 0;
     (ov.idleRank || []).forEach((s) => {
@@ -212,12 +266,14 @@ export function useDashboard() {
     idleOpt.value = gaugeOption("闲置", idlePct, C.cyan);
     occOpt.value = gaugeOption("负荷", loadPct, C.gold);
 
+    // 告警文案来自 Spark build_alerts；没有则写「运行平稳」，接口挂了走 fail()。
     const rawAlerts = bd?.alerts?.length ? bd.alerts : an?.alerts || [];
     alerts.value = rawAlerts.length
       ? rawAlerts.map((a) => ({ level: a.level || "提示", title: a.title || "" }))
       : [{ level: "提示", title: "运行平稳" }];
     errorText.value = "";
 
+    // 风险页 24h 负荷：金线=预测 kWh，青柱=历史 kWh。缺小时补 0，保证横轴永远 00–23。
     const hourly = bd?.hourly?.length ? bd.hourly : an?.hourly || [];
     const hs = [...Array(24).keys()].map((h) => {
       const row = hourly.find((x) => Number(x.hour) === h) || {};
@@ -246,6 +302,7 @@ export function useDashboard() {
       ],
     };
 
+    // 风险页热力：ECharts heatmap 数据是 [小时, 星期下标, kWh]。visualMap 关掉，颜色映射藏在格子里。
     const wds = ["Mon", "Tues", "Wed", "Thurs", "Fri", "Sat", "Sun"];
     const heatData = (bd.heatmap || [])
       .map((h) => [Number(h.hour), wds.indexOf(h.weekday), n(h.kwh)])
@@ -265,6 +322,7 @@ export function useDashboard() {
       series: [{ type: "heatmap", data: heatData, itemStyle: { borderWidth: 1, borderColor: "#061014" } }],
     };
 
+    // 风险页电站画像：优先 PCA(pc1, pc2)；点大小随会话数对数放大。四类颜色与相对命名一致。
     const palette = { 晚高峰型: C.gold, 均衡高负荷型: C.cyan, 慢充短时型: C.blue, 低频型: C.mint };
     const clusters = bd.clusters || [];
     const usePca = clusters.some((c) => c.pca_x != null && c.pca_y != null);
@@ -327,6 +385,7 @@ export function useDashboard() {
       })),
     };
 
+    // 风险页 RFM 条形：Spark 粗分群人数。用户页更细的评分饼图用 charts.rfm_extra。
     const rfm = (bd.rfm || []).map((r) => ({ name: r.name, value: n(r.value) }));
     rfmOpt.value = {
       ...base(),
@@ -336,6 +395,7 @@ export function useDashboard() {
       series: [{ type: "bar", data: rfm.map((r) => r.value).reverse(), itemStyle: { borderRadius: [0, 8, 8, 0], color: C.gold } }],
     };
 
+    // 风险页桩状态饼：读业务库 pile.status，不是 Spark。
     const piles = (ov.piles || []).map((p) => ({ name: p.status, value: n(p.n) }));
     pileOpt.value = {
       textStyle: { color: "#c9ece4", fontSize: 11 },
@@ -351,6 +411,7 @@ export function useDashboard() {
       ],
     };
 
+    // 风险页特征贡献：GBT 前 6 个特征，value 已 ×100 成百分数展示。
     const imps = (bd.importances || []).slice(0, 6).map((i) => ({
       name: String(i.name || "").slice(0, 8),
       value: Math.round(n(i.value) * 1000) / 10,
@@ -362,6 +423,7 @@ export function useDashboard() {
       series: [{ type: "bar", data: imps.map((i) => i.value).reverse(), itemStyle: { color: C.blue, borderRadius: [0, 4, 4, 0] } }],
     };
 
+    // —— 运营总览 —— 日趋势双 y 轴：左订单折线，右充电量折线。
     const daily = ch.daily || [];
     dailyOpt.value = {
       ...base(["订单数", "充电量"]),
@@ -392,6 +454,7 @@ export function useDashboard() {
       ],
     };
 
+    // 用户平台环图：IOS / ANDROID / WEB，颜色写死便于答辩指认。
     const plats = ch.platform || bd.platform || [];
     const platColor = { IOS: C.cyan, ANDROID: C.purple, WEB: "#6ec6ff" };
     platformOpt.value = {
@@ -413,6 +476,7 @@ export function useDashboard() {
       ],
     };
 
+    // 地区对比：柱=订单，线=电量。站名可能较长，x 轴文字旋转 20°。
     const regions = (ch.regions || []).slice(0, 8);
     regionOpt.value = {
       ...base(["订单数", "充电量"]),
@@ -440,6 +504,7 @@ export function useDashboard() {
       ],
     };
 
+    // 热门站横向条：Spark station_rank 的 kWh TOP 8，站名超长截断。
     const topRows = (bd.topStations || []).slice(0, 8);
     topOpt.value = {
       ...base(),
@@ -456,6 +521,7 @@ export function useDashboard() {
       ],
     };
 
+    // 星期柱：一周订单量，不是热力图（热力在风险页）。
     const wday = ch.weekday || [];
     weekdayOpt.value = {
       ...base(["订单数"]),
@@ -471,6 +537,7 @@ export function useDashboard() {
       ],
     };
 
+    // —— 充电行为 —— 24h 柱+线：柱订单、线电量。
     const hours = ch.hours || [];
     hourOpt.value = {
       ...base(["订单数", "充电量"]),
@@ -500,6 +567,7 @@ export function useDashboard() {
       ],
     };
 
+    // 分类柱的共用工厂：SOC / 时长 / 费用 / 温度分箱都走这里。
     const barCat = (rows, color) => ({
       ...base(),
       xAxis: { type: "category", data: rows.map((r) => r.name), axisLabel: { ...axis().axisLabel, rotate: 18 }, ...axis() },
@@ -510,6 +578,7 @@ export function useDashboard() {
     durOpt.value = barCat(ch.duration || [], C.purple);
     feeOpt.value = barCat(ch.fees || [], C.gold);
 
+    // 效率散点：横轴 log(订单量) 拉开长尾站，纵轴均电量，颜色=KMeans 画像。
     const clusterByName = {};
     (bd.clusters || []).forEach((c) => {
       if (c?.name) clusterByName[c.name] = c;
@@ -571,6 +640,7 @@ export function useDashboard() {
       })),
     };
 
+    // —— 智能预测 —— 7 日：历史日画实柱订单，全序列画预测电量线；未来日订单为 null。
     const f7 = ch.forecast7 || [];
     forecastOpt.value = {
       ...base(["实际订单", "预测充电量"]),
@@ -598,6 +668,7 @@ export function useDashboard() {
       ],
     };
 
+    // 测试集对照：实线=真实日订单，虚线=季节回退预测。不在浏览器里训练。
     const predO = ch.daily_pred_orders || [];
     testOpt.value = {
       ...base(["实际值", "预测值"]),
@@ -623,6 +694,7 @@ export function useDashboard() {
       ],
     };
 
+    // 三模型柱+线：MAE/RMSE 左轴，R² 右轴 0–1。可附带「订单季节」第四组。
     const models = (bd.models || []).map((m) => ({
       name: m.name,
       mae: n(m.mae),
@@ -646,6 +718,7 @@ export function useDashboard() {
       ],
     };
 
+    // —— 用户分析 —— 画像卡片文案 + RFM 评分饼。人数可以不等（评分切，不是 50% 切人）。
     bestModels.value = ch.best_models || [];
     const extra = ch.rfm_extra || {};
     portraits.value = extra.portraits || [];
@@ -667,6 +740,7 @@ export function useDashboard() {
       ],
     };
 
+    // K 曲线：k=2..6 轮廓系数，给「为什么 k=4」用。
     const kc = ch.k_curve || [];
     kCurveOpt.value = {
       ...base(),
@@ -686,6 +760,7 @@ export function useDashboard() {
       ],
     };
 
+    // 群体雷达：五维已归一到 0–100，indicator.max 固定 100。
     const radarRows = extra.radar || [];
     radarOpt.value = {
       textStyle: { color: "#c9ece4", fontSize: 11 },
@@ -710,6 +785,7 @@ export function useDashboard() {
       ],
     };
 
+    // RFM 散点：x=Recency 天，y=Frequency 次，点大小随 Monetary。
     const sc = extra.scatter || [];
     const byName = {};
     sc.forEach((p) => {
@@ -730,6 +806,7 @@ export function useDashboard() {
       })),
     };
 
+    // —— 数据质量 —— 口径归清洗 scan_quality；这里只负责把数字画成柱/漏斗/散点。
     const q = ch.quality || {};
     qualityKpis.value = [
       { key: "raw", label: "原始会话", value: fmtInt(q.raw_sessions), hint: "nvv2t 真实表", color: C.cyan },
@@ -860,7 +937,10 @@ export function useDashboard() {
     tempOpt.value = barCat(q.temp || [], C.gold);
   }
 
-  /** 并行拉三个只读接口；失败只改告警文案，不写库。 */
+  /**
+   * 并行拉三个只读 GET，再 apply。
+   * 失败走 fail()：风险页告警变红字，已有图保持上一帧。
+   */
   async function refresh() {
     try {
       const [ov, an, bd] = await Promise.all([jget("/api/overview"), jget("/api/analysis"), jget("/api/bigdata")]);
@@ -872,10 +952,12 @@ export function useDashboard() {
 
   onMounted(() => {
     refresh();
+    /* 12 秒轮询：会议室电视自动换数；切页不走这里，只改 tab。 */
     timer = window.setInterval(refresh, 12000);
   });
   onBeforeUnmount(() => clearInterval(timer));
 
+  // 字段名 = Screen props 名。新增图时先在这里加 ref，再在对应 Screen defineProps。
   return {
     tab,
     tabs,

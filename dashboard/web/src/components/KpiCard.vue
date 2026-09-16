@@ -1,5 +1,17 @@
 <script setup>
-/** 顶栏 KPI：label / 大数字 / 灰色 hint，左侧色条用 CSS 变量 --c。 */
+/**
+ * 顶栏 KPI 卡片。App.vue 里循环 dash.kpis 或 dash.qualityKpis。
+ *
+ * 【字段】label 小标题、value 已经格式化好的大数字字符串、hint 灰色说明、color 色条。
+ * 数字怎么算在 useDashboard.apply，本组件只排版。超长数字用 ellipsis 避免撑破六列。
+ *
+ * 【样式】左侧 3px 色条用 CSS 变量 --c，由 color prop 注入。
+ *
+ * @prop {string} label 例如「累计充电量」
+ * @prop {string} value 例如「12,345.00 kWh」
+ * @prop {string} [hint] 例如日期区间或「nvv2t 真实表」
+ * @prop {string} [color="#3ee0c3"] 大数字和左侧色条
+ */
 defineProps({
   label: { type: String, required: true },
   value: { type: String, required: true },

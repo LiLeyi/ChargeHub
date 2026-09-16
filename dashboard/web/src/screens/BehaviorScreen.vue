@@ -1,17 +1,29 @@
 <script setup>
 /**
- * 充电行为：24h 分布、SOC、时长、费用、电站效率散点。
- * 效率图横轴是订单量（对数），纵轴均电量，颜色=Spark 画像；
- * 不能用均时长×均电量，扩样后那两维几乎常数会挤成一团。
+ * 充电行为页栅格。
+ *
+ * 【布局】2 行 × 3 列。第一行 24h 分布跨两列；第二行 SOC / 时长 / 费用；
+ * 右下是电站效率散点。
+ *
+ * 【数据】option 由 apply() 从 charts.hours / soc / duration / fees / efficiency 填好。
+ * 效率图：横轴 log(订单量)、纵轴均电量、颜色=Spark 四类画像。
+ * 不能改成均时长×均电量——扩样后那两维几乎常数，点会挤成一团。
+ *
+ * 【不要改】散点坐标类型（必须是 log）和 series 分组逻辑。
  */
 import PanelCard from "../components/PanelCard.vue";
 import ChartBox from "../components/ChartBox.vue";
 
 defineProps({
+  /** 24 小时订单柱 + 电量线 */
   hourOpt: { type: Object, default: () => ({}) },
+  /** 电池 SOC 分箱柱 */
   socOpt: { type: Object, default: () => ({}) },
+  /** 充电时长分箱柱 */
   durOpt: { type: Object, default: () => ({}) },
+  /** 充电费用分箱柱 */
   feeOpt: { type: Object, default: () => ({}) },
+  /** 电站效率散点（log 订单量 × 均电量，颜色=画像） */
   effOpt: { type: Object, default: () => ({}) },
 });
 </script>

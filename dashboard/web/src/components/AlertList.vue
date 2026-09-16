@@ -1,5 +1,12 @@
 <script setup>
-/** 告警列表。level 含「严重」时用玫瑰点。数据来自 Spark build_alerts。 */
+/**
+ * 风险页告警列表。文案来自 Spark `build_alerts`，本组件只做样式。
+ *
+ * 【level】「严重」「错误」红点，「一般」金点，其它青点。
+ * 接口失败时 useDashboard.fail() 会塞一条 level=「错误」的项，页面不白屏。
+ *
+ * @prop {{ level: string, title: string }[]} items
+ */
 defineProps({
   items: { type: Array, default: () => [] },
 });

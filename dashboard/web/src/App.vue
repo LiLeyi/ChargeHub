@@ -1,8 +1,19 @@
 <script setup>
 /**
- * 大屏壳：顶栏品牌 + 六页签 + KPI 条 + 舞台。
- * 质量页换用 qualityKpis，其余页用 Spark/业务 KPI。
- * 不在这里画图，只按 dash.tab 挂载对应 Screen。
+ * 大屏壳（大屏前端主文件）：顶栏品牌 + 六页签 + KPI 条 + 舞台。
+ *
+ * 【职责】只负责「谁上台、格子怎么切」。图的 series 在 useDashboard.apply，
+ * 本文件禁止 fetch、禁止改 option。
+ *
+ * 【布局】.page 三行 Grid：64px 顶栏 / 78px KPI / 剩下全给舞台。
+ * minmax(0,1fr) 和 .stage { min-height:0 } 必须成对出现，否则子图高度算成内容高度，ECharts 被压扁。
+ *
+ * 【页签】dash.tab 驱动 v-if（不是 v-show）：切走即卸载 Screen，ChartBox 才能 dispose canvas。
+ * 质量页顶栏换成 dash.qualityKpis（原始会话/通过率/免费单），其余页用 Spark/业务 KPI。
+ *
+ * 【刷新】按钮调用 dash.refresh → 并行三个 GET。另有 12 秒定时器在 useDashboard 里。
+ *
+ * 【协作】engine / dateRange 来自 Spark KPI（HDFS 或 LOCAL）。打开方式见 dashboard/app.py。
  */
 import { reactive } from "vue";
 import KpiCard from "./components/KpiCard.vue";
@@ -14,12 +25,14 @@ import QualityScreen from "./screens/QualityScreen.vue";
 import RiskScreen from "./screens/RiskScreen.vue";
 import { useDashboard } from "./composables/useDashboard.js";
 
+/** 全页唯一数据源。reactive 包一层是为了模板里直接写 dash.tab = ... */
 const dash = reactive(useDashboard());
 </script>
 
 <template>
   <div class="page">
     <header class="head">
+      <!-- 左：品牌；中：六页签；右：HDFS/LOCAL、样本日期、时钟、手动刷新 -->
       <div class="brand">
         <i></i>
         <div>
@@ -46,6 +59,7 @@ const dash = reactive(useDashboard());
       </div>
     </header>
 
+    <!-- 质量页换清洗口径 KPI，其余页用 Spark/业务 KPI。 -->
     <div class="kpis">
       <KpiCard
         v-for="item in (dash.tab === 'quality' ? dash.qualityKpis : dash.kpis)"
@@ -57,6 +71,7 @@ const dash = reactive(useDashboard());
       />
     </div>
 
+    <!-- v-if 切页：卸载旧 Screen，让 ChartBox dispose，避免 canvas 泄漏。 -->
     <div class="stage">
       <OpsScreen
         v-if="dash.tab === 'ops'"
@@ -118,6 +133,7 @@ const dash = reactive(useDashboard());
 </template>
 
 <style scoped>
+/* 整页三行：顶栏、KPI、舞台。第三行 minmax(0,1fr) 把剩余视口分给图。 */
 .page {
   width: 100%;
   height: 100%;
@@ -126,6 +142,7 @@ const dash = reactive(useDashboard());
   grid-template-rows: 64px 78px minmax(0, 1fr);
   gap: 8px;
 }
+/* 顶栏三列：品牌 | 页签居中 | 引擎/时间/刷新 */
 .head {
   display: grid;
   grid-template-columns: minmax(240px, 1.1fr) minmax(0, 1.4fr) minmax(240px, 1fr);
@@ -204,6 +221,7 @@ nav button.on {
   gap: 8px;
   min-height: 0;
 }
+/* 舞台必须把高度传给当前 Screen；子选择器 height:100% 接住 v-if 出来的根节点。 */
 .stage {
   min-height: 0;
   height: 100%;

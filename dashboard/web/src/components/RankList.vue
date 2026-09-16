@@ -1,5 +1,14 @@
 <script setup>
-/** 营收排行条。items[].name/value/pct，pct 已在 apply() 按最大值归一。 */
+/**
+ * 风险页「电站营收排行」列表。不是 ECharts，用 CSS 底条模拟进度。
+ *
+ * 【数据】items[].name / value / pct。pct 已在 apply() 按最大值归一到 0–100，
+ * 本组件不要再自己算百分比。value 单位元，与 overview 金额约定一致。
+ *
+ * 【样式】每行三列：名次 | 站名省略 | 金额；绝对定位的 <i> 画底条。
+ *
+ * @prop {{ name: string, value: number, pct: number }[]} items
+ */
 defineProps({
   items: { type: Array, default: () => [] },
 });

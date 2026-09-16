@@ -1,6 +1,17 @@
 <script setup>
-/** 图卡片：标题 + 可伸缩 body。min-height:0 让 Grid 子项把高度传给 ECharts。 */
+/**
+ * 带标题的卡片壳。所有 Screen 的图都包在这层里。
+ *
+ * 【高度链】.panel flex 列 → h3 不伸缩 → .body flex:1 且 min-height:0。
+ * 最后这一句是大屏不压扁图的关键：Grid 子项默认 min-height:auto，
+ * 会按内容撑开，ECharts 拿不到剩余视口高度。
+ *
+ * 【不要】在卡片里写 series。slot 里通常是 ChartBox / RankList / AlertList。
+ *
+ * @prop {string} title 左上角小标题，空字符串则不渲染 h3
+ */
 defineProps({
+  /** 卡片标题，例如「每日订单与充电量趋势」 */
   title: { type: String, default: "" },
 });
 </script>

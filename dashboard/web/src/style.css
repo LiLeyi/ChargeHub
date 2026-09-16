@@ -1,3 +1,12 @@
+/**
+ * 全局皮肤（未 scoped）。保证 html/body/#app 高度链 100%，大屏才能用 CSS Grid 把图撑满。
+ *
+ * overflow:hidden —— 会议室电视不要出现浏览器滚动条；内部卡片自己 overflow:auto。
+ * 深色底 + 两团径向青光：运营大屏配色，与卡片边框 rgba(78,214,196) 呼应。
+ * box-sizing:border-box —— padding 不把 Grid 格子撑破。
+ *
+ * 各 Screen / 组件的布局写在各自 <style scoped>，不要往这里堆页内样式。
+ */
 html, body, #app {
   width: 100%;
   height: 100%;
