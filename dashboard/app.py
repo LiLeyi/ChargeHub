@@ -88,6 +88,27 @@ def findSparkReport() -> Path | None:
     return None
 
 
+def findDashCharts() -> Path | None:
+    """定位 enrich_dashboard 写出的 dash_charts.json。"""
+    spark = findSparkReport()
+    cands = []
+    if spark:
+        cands.append(spark.with_name("dash_charts.json"))
+    home = Path.home()
+    env = Path(os.environ["CHARGEHUB_SPARK_OUT"]) if os.environ.get("CHARGEHUB_SPARK_OUT") else None
+    cands.extend(
+        [
+            env / "dash_charts.json" if env else None,
+            ROOT / "bigdata" / "output" / "dash_charts.json",
+            home / "ChargeHub-Linux" / "bigdata" / "output" / "dash_charts.json",
+        ]
+    )
+    for p in cands:
+        if p is not None and p.exists():
+            return p
+    return None
+
+
 def loadSpark() -> dict:
     """读 Spark 报告；文件坏了或没有则 {}。"""
     p = findSparkReport()
@@ -97,6 +118,31 @@ def loadSpark() -> dict:
         return json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+
+
+_CHARTS: dict | None = None
+
+
+def loadCharts() -> dict:
+    """读多屏图表汇总；没有文件时尝试现场 enrich（只算一次，缓存）。"""
+    global _CHARTS
+    if _CHARTS is not None:
+        return _CHARTS
+    p = findDashCharts()
+    if p is not None:
+        try:
+            _CHARTS = json.loads(p.read_text(encoding="utf-8"))
+            return _CHARTS
+        except (OSError, json.JSONDecodeError):
+            pass
+    try:
+        sys.path.insert(0, str(ROOT / "bigdata"))
+        from enrich_dashboard import build
+
+        _CHARTS = build()
+    except Exception:
+        _CHARTS = {}
+    return _CHARTS
 
 
 def q(sql: str, args=()):
@@ -285,6 +331,7 @@ def bigdata():
             "rfm": spark.get("rfm") or [],
             "rules": spark.get("rules") or [],
             "peakClf": spark.get("peak_clf") or {},
+            "charts": loadCharts(),
             "updated": spark.get("updated") or datetime.now().strftime("%H:%M:%S"),
         }
     )
@@ -331,6 +378,7 @@ def main() -> None:
         DB = ROOT / "database" / "chargehub.db"
         initDb(DB)
     print("database:", DB)
+    print("charts:", findDashCharts() or "missing")
     print("dashboard http://127.0.0.1:5000")
     print("dashboard http://0.0.0.0:5000  (局域网可用虚拟机 IP 访问)")
     app.run(host="0.0.0.0", port=5000, debug=False)

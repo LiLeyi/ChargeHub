@@ -1,88 +1,113 @@
 <script setup>
+import { reactive } from "vue";
 import KpiCard from "./components/KpiCard.vue";
-import PanelCard from "./components/PanelCard.vue";
-import ChartBox from "./components/ChartBox.vue";
-import RankList from "./components/RankList.vue";
-import AlertList from "./components/AlertList.vue";
+import OpsScreen from "./screens/OpsScreen.vue";
+import BehaviorScreen from "./screens/BehaviorScreen.vue";
+import ForecastScreen from "./screens/ForecastScreen.vue";
+import UserScreen from "./screens/UserScreen.vue";
+import QualityScreen from "./screens/QualityScreen.vue";
+import RiskScreen from "./screens/RiskScreen.vue";
 import { useDashboard } from "./composables/useDashboard.js";
 
-const {
-  clock,
-  engine,
-  kpis,
-  ranks,
-  alerts,
-  loadOpt,
-  heatOpt,
-  clusterOpt,
-  rfmOpt,
-  pileOpt,
-  featOpt,
-  idleOpt,
-  occOpt,
-} = useDashboard();
+const dash = reactive(useDashboard());
 </script>
 
 <template>
   <div class="page">
     <header class="head">
-      <div class="brand-line"></div>
-      <h1>CHARGEHUB</h1>
+      <div class="brand">
+        <i></i>
+        <div>
+          <h1>ChargeHub 智慧充电运营大屏</h1>
+          <p>HADOOP · SPARK · MACHINE LEARNING · VUE 3</p>
+        </div>
+      </div>
+      <nav>
+        <button
+          v-for="item in dash.tabs"
+          :key="item.id"
+          :class="{ on: dash.tab === item.id }"
+          type="button"
+          @click="dash.tab = item.id"
+        >
+          {{ item.label }}
+        </button>
+      </nav>
       <div class="meta">
-        <span>{{ engine }}</span>
-        <b>{{ clock }}</b>
+        <span>{{ dash.engine }}</span>
+        <small>{{ dash.dateRange }}</small>
+        <b>{{ dash.clock }}</b>
+        <button class="refresh" type="button" @click="dash.refresh">刷新数据</button>
       </div>
     </header>
 
     <div class="kpis">
       <KpiCard
-        v-for="item in kpis"
+        v-for="item in (dash.tab === 'quality' ? dash.qualityKpis : dash.kpis)"
         :key="item.key"
         :label="item.label"
         :value="item.value"
+        :hint="item.hint"
         :color="item.color"
       />
     </div>
 
     <div class="stage">
-      <div class="col left">
-        <PanelCard title="电站营收排行">
-          <RankList :items="ranks" />
-        </PanelCard>
-        <PanelCard title="闲置 / 负荷">
-          <div class="split">
-            <ChartBox :option="idleOpt" />
-            <ChartBox :option="occOpt" />
-          </div>
-        </PanelCard>
-      </div>
-
-      <div class="col mid">
-        <PanelCard class="span-load" title="24h 负荷预测 / 历史">
-          <ChartBox :option="loadOpt" />
-        </PanelCard>
-        <PanelCard title="时段热力">
-          <ChartBox :option="heatOpt" />
-        </PanelCard>
-        <PanelCard title="电站画像">
-          <ChartBox :option="clusterOpt" />
-        </PanelCard>
-      </div>
-
-      <div class="col right">
-        <PanelCard title="实时告警">
-          <AlertList :items="alerts" />
-        </PanelCard>
-        <PanelCard title="用户 RFM">
-          <ChartBox :option="rfmOpt" />
-        </PanelCard>
-        <PanelCard title="桩状态 / 特征">
-          <div class="split">
-            <ChartBox :option="pileOpt" />
-            <ChartBox :option="featOpt" />
-          </div>
-        </PanelCard>
-      </div>
+      <OpsScreen
+        v-if="dash.tab === 'ops'"
+        :daily-opt="dash.dailyOpt"
+        :platform-opt="dash.platformOpt"
+        :region-opt="dash.regionOpt"
+        :top-opt="dash.topOpt"
+        :weekday-opt="dash.weekdayOpt"
+      />
+      <BehaviorScreen
+        v-if="dash.tab === 'behavior'"
+        :hour-opt="dash.hourOpt"
+        :soc-opt="dash.socOpt"
+        :dur-opt="dash.durOpt"
+        :fee-opt="dash.feeOpt"
+        :eff-opt="dash.effOpt"
+      />
+      <ForecastScreen
+        v-if="dash.tab === 'forecast'"
+        :forecast-opt="dash.forecastOpt"
+        :test-opt="dash.testOpt"
+        :model-opt="dash.modelOpt"
+        :best-models="dash.bestModels"
+      />
+      <UserScreen
+        v-if="dash.tab === 'users'"
+        :rfm-pie-opt="dash.rfmPieOpt"
+        :k-curve-opt="dash.kCurveOpt"
+        :radar-opt="dash.radarOpt"
+        :rfm-scatter-opt="dash.rfmScatterOpt"
+        :portraits="dash.portraits"
+      />
+      <QualityScreen
+        v-if="dash.tab === 'quality'"
+        :issue-opt="dash.issueOpt"
+        :bat-status-opt="dash.batStatusOpt"
+        :funnel-opt="dash.funnelOpt"
+        :q-tariff-opt="dash.qTariffOpt"
+        :q-facility-opt="dash.qFacilityOpt"
+        :volt-soc-opt="dash.voltSocOpt"
+        :soc-daily-opt="dash.socDailyOpt"
+        :temp-opt="dash.tempOpt"
+      />
+      <RiskScreen
+        v-if="dash.tab === 'risk'"
+        :ranks="dash.ranks"
+        :alerts="dash.alerts"
+        :load-opt="dash.loadOpt"
+        :heat-opt="dash.heatOpt"
+        :cluster-opt="dash.clusterOpt"
+        :rfm-opt="dash.rfmOpt"
+        :pile-opt="dash.pileOpt"
+        :feat-opt="dash.featOpt"
+        :idle-opt="dash.idleOpt"
+        :occ-opt="dash.occOpt"
+      />
     </div>
   </div>
 </template>
@@ -93,42 +118,80 @@ const {
   height: 100%;
   padding: 8px 10px 10px;
   display: grid;
-  grid-template-rows: 50px 76px minmax(0, 1fr);
+  grid-template-rows: 64px 78px minmax(0, 1fr);
   gap: 8px;
 }
 .head {
   display: grid;
-  grid-template-columns: 160px 1fr 240px;
+  grid-template-columns: minmax(240px, 1.1fr) minmax(0, 1.4fr) minmax(240px, 1fr);
   align-items: center;
   gap: 8px;
-  min-height: 0;
+  padding: 0 6px;
 }
-.brand-line {
-  height: 4px;
-  border-radius: 99px;
-  background: linear-gradient(90deg, transparent, #3ee0c3, transparent);
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.brand i {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #3ee0c3, #5ad0ff);
+  box-shadow: 0 0 16px rgba(62, 224, 195, 0.35);
 }
 h1 {
   margin: 0;
-  text-align: center;
-  letter-spacing: 10px;
-  font-size: 22px;
-  font-weight: 800;
-  color: #d9fff6;
-  text-shadow: 0 0 18px rgba(62, 224, 195, 0.35);
+  font-size: 20px;
+  letter-spacing: 1px;
+  color: #e8fffa;
+}
+.brand p {
+  margin: 2px 0 0;
+  font-size: 10px;
+  letter-spacing: 1.4px;
+  color: #6fa39a;
+}
+nav {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+nav button {
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.04);
+  color: #8fbfb6;
+  padding: 7px 12px;
+  border-radius: 99px;
+  cursor: pointer;
+  font-size: 12px;
+}
+nav button.on {
+  color: #062018;
+  background: linear-gradient(90deg, #3ee0c3, #5ad0ff);
+  font-weight: 700;
 }
 .meta {
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   color: #7aa8a0;
-  font-size: 13px;
+  font-size: 12px;
 }
 .meta b {
   color: #3ee0c3;
   font-size: 16px;
   letter-spacing: 1px;
+}
+.meta small { color: #5e8c84; }
+.refresh {
+  border: 1px solid rgba(62, 224, 195, 0.4);
+  background: rgba(62, 224, 195, 0.12);
+  color: #d9fff6;
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
 }
 .kpis {
   display: grid;
@@ -137,31 +200,10 @@ h1 {
   min-height: 0;
 }
 .stage {
-  display: grid;
-  grid-template-columns: 22% minmax(0, 1fr) 25%;
-  gap: 8px;
   min-height: 0;
   height: 100%;
 }
-.col {
-  display: grid;
-  gap: 8px;
+.stage > * {
   height: 100%;
-  min-height: 0;
-  min-width: 0;
-}
-.left { grid-template-rows: minmax(0, 1fr) 150px; }
-.mid {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  grid-template-rows: 44% minmax(0, 1fr);
-}
-.span-load { grid-column: 1 / -1; }
-.right { grid-template-rows: minmax(0, 1.2fr) minmax(0, 0.9fr) minmax(0, 1fr); }
-.split {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  height: 100%;
-  min-height: 0;
 }
 </style>

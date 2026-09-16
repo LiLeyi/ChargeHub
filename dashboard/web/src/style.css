@@ -8,8 +8,8 @@ body {
   color: #e7fbf4;
   font-family: "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
   background:
-    radial-gradient(1200px 700px at 8% -12%, rgba(62, 224, 195, 0.16), transparent 52%),
-    radial-gradient(900px 500px at 110% 0%, rgba(244, 195, 106, 0.08), transparent 48%),
-    #071318;
+    radial-gradient(900px 480px at 8% -10%, rgba(46, 180, 220, 0.16), transparent 55%),
+    radial-gradient(800px 420px at 100% 0%, rgba(62, 224, 195, 0.1), transparent 50%),
+    #06141c;
 }
 * { box-sizing: border-box; }

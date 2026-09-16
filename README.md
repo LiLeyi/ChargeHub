@@ -490,9 +490,9 @@ bash /mnt/hgfs/ChargeHub/scripts/rebuild.sh
 
 | 路径 | 作用 |
 |------|------|
-| `dashboard/web/` | Vue 3 源码（Composition API + `<script setup>`） |
+| `dashboard/web/` | Vue 3 源码（Composition API + `<script setup>`），顶栏切换 **运营总览 / 行为分析 / 智能预测 / 用户分析 / 数据质量 / 风险调度** |
 | `dashboard/dist/` | `npm run build` 的产物，Flask 优先托管这里 |
-| `dataset/` + `bigdata/output/` | Spark 输入 CSV 和已经算好的 `spark_report.json` |
+| `dataset/` + `bigdata/output/` | Spark 输入 CSV、`spark_report.json`、多屏图表 `dash_charts.json` |
 
 ### 11.1 只看大屏（组员克隆后）
 

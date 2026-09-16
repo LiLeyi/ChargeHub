@@ -203,19 +203,15 @@ def cluster_stations(spark, sessions, stations):
     joined = labeled.join(names, "stationId", "left")
     cluster_avg = (
         joined.groupBy("cluster")
-        .agg(avg("avg_hour").alias("h"), avg("sessions").alias("n"), avg("avg_kwh").alias("kwh"))
+        .agg(
+            avg("avg_hour").alias("h"),
+            avg("sessions").alias("n"),
+            avg("avg_kwh").alias("kwh"),
+            avg("avg_hrs").alias("hrs"),
+        )
         .collect()
     )
-    labels = {}
-    for r in cluster_avg:
-        if r["h"] is not None and r["h"] >= 17:
-            labels[int(r["cluster"])] = "晚高峰型"
-        elif r["n"] is not None and r["n"] < 400:
-            labels[int(r["cluster"])] = "低频型"
-        elif r["kwh"] is not None and r["kwh"] < 8:
-            labels[int(r["cluster"])] = "慢充短时型"
-        else:
-            labels[int(r["cluster"])] = "均衡高负荷型"
+    labels = name_station_clusters(cluster_avg)
     rows = []
     for r in joined.orderBy(col("sessions").desc()).limit(80).collect():
         cid = int(r["cluster"])
@@ -238,6 +234,32 @@ def cluster_stations(spark, sessions, stations):
             }
         )
     return rows, labels, k
+
+
+def name_station_clusters(cluster_avg) -> dict:
+    """每个簇只给一个互不相同的名字，按簇间相对特征，不用绝对阈值。
+
+    扩样后各站均电量/均时段很接近，再用 hour>=17、kwh<8 会把 4 簇全叫成慢充短时型。
+    """
+    remaining = {int(r["cluster"]): r for r in cluster_avg}
+    labels: dict[int, str] = {}
+    if not remaining:
+        return labels
+
+    def take(name: str, key, reverse: bool) -> None:
+        if not remaining:
+            return
+        cid = (max if reverse else min)(remaining, key=lambda c: float(remaining[c][key] or 0))
+        labels[cid] = name
+        remaining.pop(cid)
+
+    take("晚高峰型", "h", True)
+    take("低频型", "n", False)
+    take("慢充短时型", "kwh", False)
+    for cid in list(remaining):
+        labels[cid] = "均衡高负荷型"
+        remaining.pop(cid)
+    return labels
 
 
 def battery_risks(spark, telemetry, sessions, stations):
@@ -742,6 +764,12 @@ def main() -> None:
     write_json(dest / "hourly.json", hourly)
     write_json(dest / "clusters.json", clusters)
     write_json(dest / "battery.json", battery)
+    try:
+        from enrich_dashboard import main as enrich_main
+
+        enrich_main()
+    except Exception as exc:
+        print("ENRICH_SKIP", exc)
     print("SPARK_OK")
     print("out", dest / "spark_report.json")
     print("sessions", n_sess, "mae", metrics["mae"], "rmse", metrics["rmse"], "engine", engine)
